@@ -18,7 +18,15 @@ import {
   type FlatNode,
   type MindNode,
 } from '@ai-mind-map/core';
-import { MindRenderer } from '@ai-mind-map/renderer';
+import { MindRenderer, builtinThemeRefs } from '@ai-mind-map/renderer';
+
+const THEME_KEY = 'ai-mind-map:theme';
+
+function applyTheme(name: string): void {
+  const t = builtinThemeRefs[name];
+  if (t) renderer.setTheme(t.theme);
+  localStorage.setItem(THEME_KEY, name);
+}
 import type { MindDocument } from '@ai-mind-map/core';
 
 const registry = new NodeTypeRegistry();
@@ -179,12 +187,19 @@ function toggleCollapse(id: string): void {
   relayout();
 }
 
-function addChild(parentId: string, type = 'case', text = '新用例'): void {
+function addChild(parentId: string, type = 'case', text = '新用例', edit = true): void {
   snapshot();
   const r = store.addSubtree(parentId, { type, text, props: type === 'case' ? { priority: 'P2' } : {} });
   relayout();
   renderer.focusNode(r.nodeId);
   selectId(r.nodeId);
+  if (edit) startEdit(r.nodeId); // XMind 式：建完即编辑
+}
+
+/** 智能新子节点类型：跟随父级语义（folder 下建 folder 路径层，深层叶子用例） */
+function smartChildType(parentDepth: number): string {
+  // 路径深度 1-2 层用 folder，更深默认用例叶子；根的直接子级一律 folder
+  return parentDepth === 0 ? 'folder' : 'case';
 }
 
 function addSibling(id: string): void {
@@ -289,17 +304,24 @@ window.addEventListener('keydown', (e) => {
   const selId = selected?.id;
   if (!selId) return;
 
-  if (e.key === 'Tab' || e.key === 'Insert') {
+  if (e.key === 'Tab' && e.shiftKey) {
+    // ⇧Tab 反缩进：把节点提升到祖父之下（幕布行为）
     e.preventDefault();
-    if (store.getNode(selId)!.type === 'case') addSibling(selId);
-    else addChild(selId, 'case', '新用例');
+    outdent(selId);
+  } else if (e.key === 'Tab' || e.key === 'Insert') {
+    e.preventDefault();
+    if (store.getNode(selId)!.type === 'case') {
+      addSibling(selId);
+    } else {
+      addChild(selId, smartChildType(depthOf(selId)));
+    }
   } else if (e.key === 'Enter') {
     e.preventDefault();
     addSibling(selId);
   } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
     e.preventDefault();
-    navigateLR(e.key === 'ArrowLeft' ? 'in' : 'out');
-    } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    smartNavigateLR(e.key === 'ArrowRight' ? 'in' : 'out');
+  } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
     e.preventDefault();
     navigateUD(e.key === 'ArrowUp' ? -1 : 1);
   } else if (e.key === 'F2') {
@@ -331,13 +353,29 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ---------- 导航 ----------
-function navigateLR(dir: 'in' | 'out'): void {
+function depthOf(id: string): number {
+  let d = 0;
+  let cur = store.getParent(id);
+  while (cur) {
+    d++;
+    cur = store.getParent(cur.id);
+  }
+  return d;
+}
+
+/** 智能左右键（XMind 行为）：折叠态先展开再进入子级；展开态直接进入；'out' 返回父级 */
+function smartNavigateLR(dir: 'in' | 'out'): void {
   const id = selected?.id;
   if (!id) return;
   const cur = store.getNode(id)!;
   const kids = cur.children ?? [];
   if (dir === 'in') {
-    if (kids.length) selectId(kids[0].id);
+    if (kids.length === 0) return;
+    if (expandedIds && !expandedIds.has(id)) {
+      expandedIds!.add(id);
+      relayout();
+    }
+    selectId(kids[0].id);
   } else {
     const p = store.getParent(id);
     if (p && p.id !== store.root.id) selectId(p.id);
@@ -399,8 +437,7 @@ window.addEventListener('pointerdown', (e) => {
   if (!ctxMenuEl.contains(e.target as Node)) hideCtxMenu();
 });
 
-function pasteUnder(parentId: string): void {
-  if (!clipboard) return;
+function pasteUnder(parentId: string): void {  if (!clipboard) return;
   const node = store.getNode(parentId);
   if (!node) return;
   if (registry.get(node.type).leafOnly) {
@@ -412,6 +449,21 @@ function pasteUnder(parentId: string): void {
   const r = store.addSubtree(parentId, clone);
   relayout();
   renderer.focusNode(r.nodeId);
+}
+
+/** ⇧Tab 反缩进：把节点提升一级（挂到祖父之下，位置紧随原父节点） */
+function outdent(id: string): void {
+  const parent = store.getParent(id);
+  if (!parent || parent.id === store.root.id) return; // 顶层/根子级不可再提
+  const grandparent = store.getParent(parent.id);
+  if (!grandparent) return;
+  snapshot();
+  store.moveSubtree(id, grandparent.id);
+  // 放到原父节点后面
+  const idx = (grandparent.children ?? []).findIndex((c) => c.id === parent.id);
+  store.moveSubtree(id, grandparent.id, idx + 1);
+  relayout();
+  renderer.focusNode(id);
 }
 
 function convertType(id: string, newType: string): void {
@@ -816,6 +868,16 @@ if (stored) {
   loadDoc(makeDemo(), false);
 }
 updateZoomPct();
+
+// 主题
+const savedTheme = localStorage.getItem(THEME_KEY);
+if (savedTheme) {
+  (document.getElementById('theme-select') as HTMLSelectElement).value = savedTheme;
+  applyTheme(savedTheme);
+}
+document.getElementById('theme-select')?.addEventListener('change', (e) => {
+  applyTheme((e.target as HTMLSelectElement).value);
+});
 
 // 暴露给自动化测试 / 控制台调试
 (window as unknown as Record<string, unknown>).renderer = renderer;

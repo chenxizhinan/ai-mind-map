@@ -146,6 +146,11 @@
         <span class="spacer"></span>
         <button id="btn-undo" title="撤销 (⌘Z)">↩ 撤销</button>
         <button id="btn-redo" title="重做 (⌘⇧Z)">↪ 重做</button>
+        <select id="theme-select" title="主题风格">
+          <option value="default">默认蓝</option>
+          <option value="gold">黑金</option>
+          <option value="forest">森绿</option>
+        </select>
         <button id="import-xmind">导入 XMind</button>
         <button id="export-xmind">导出 XMind</button>
         <button id="export-md">导出 MD</button>
@@ -172,13 +177,15 @@
         </aside>
       </main>
       <footer class="hint">
-        <span>Tab/Insert：新建子节点</span>
+        <span>Tab/Insert：新建子节点（自动进入编辑）</span>
+        <span>⇧Tab：提升一级</span>
         <span>Enter：新建同级节点</span>
         <span>⌘Z / ⌘⇧Z：撤销/重做</span>
-        <span>Space/Enter 开头：折叠/展开</span>
-        <span>方向键：在节点间导航</span>
+        <span>Space：折叠/展开</span>
+        <span>→ 展开/进入，← 返回父级</span>
+        <span>↑↓ 兄弟导航</span>
         <span>F2：编辑文本</span>
-        <span>Del/Backspace：删除</span>
+        <span>Del：删除</span>
         <span>⌘C/⌘V：复制/粘贴子树</span>
       </footer>
       <div id="ctx-menu"></div>

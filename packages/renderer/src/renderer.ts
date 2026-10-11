@@ -57,6 +57,37 @@ export interface RendererOptions {
   onDrop?: (node: FlatNode, target: FlatNode | null) => void;
 }
 
+/** 内置主题：默认（清爽蓝）/ 黑金（商务）/ 森绿（护眼） */
+export const builtinThemes: Record<string, { label: string; theme: Partial<Theme> }> = {
+  default: { label: '默认蓝', theme: {} },
+  gold: {
+    label: '黑金',
+    theme: {
+      canvasBg: '#191919',
+      rootFill: '#d4af37',
+      rootText: '#191919',
+      branchPalette: ['#d4af37', '#c9a227', '#b8912f', '#e6c35c', '#a8842c', '#dbb84c', '#9c7a1f', '#f0d060', '#b8963e', '#8f701f'],
+      level2Fill: '#242424',
+      level2Text: '#f0e6c8',
+      leafFill: '#202020',
+      leafStroke: '#3a3a3a',
+      leafText: '#e8e0c0',
+      selectionColor: '#d4af37',
+      hoverOverlay: 'rgba(212, 175, 55, 0.12)',
+    },
+  },
+  forest: {
+    label: '森绿',
+    theme: {
+      canvasBg: '#f2f7f2',
+      rootFill: '#14532d',
+      rootText: '#ffffff',
+      branchPalette: ['#16a34a', '#15803d', '#166534', '#22c55e', '#0d9488', '#4d7c0f', '#3f6212', '#10b981', '#84cc16', '#4d7c0f'],
+      leafStroke: '#d7e5da',
+    },
+  },
+};
+
 function withAlpha(hex: string, alpha: number): string {
   const h = hex.replace('#', '');
   const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
@@ -103,6 +134,13 @@ export class MindRenderer {
 
   setViewport(vp: Partial<Viewport>): void {
     this.vp = { ...this.vp, ...vp };
+    this.dirty = true;
+    this.requestFrame();
+  }
+
+  /** 运行时切换主题（合并到默认主题） */
+  setTheme(t: Partial<Theme>): void {
+    this.theme = { ...defaultTheme, ...t };
     this.dirty = true;
     this.requestFrame();
   }
@@ -490,22 +528,29 @@ export class MindRenderer {
       ctx.textAlign = 'left';
     }
 
-    // 折叠胶囊（框外，随方向）
+    // 折叠指示（XMind 风格：白底圆点 + 内色点 + 侧边数字）
     if (n.childCount > 0 && !this.hasVisibleChildren(n)) {
-      const label = `+${n.childCount}`;
+      const label = String(n.childCount);
       ctx.font = `500 ${Math.max(8, 11 * s)}px -apple-system, sans-serif`;
-      const tw = ctx.measureText(label).width;
-      const cx = n.side === 'left' ? p0.x - tw - 14 * s : p0.x + w + 4 * s;
-      const cy = p0.y + h / 2 - 9 * s;
+      const labelW = ctx.measureText(label).width;
+      const cx = n.side === 'left' ? p0.x - 15 * s : p0.x + w + 15 * s;
+      const cy = p0.y + h / 2;
+      // 圆底（白色，带分支色描边）
       ctx.beginPath();
-      ctx.roundRect(cx, cy, tw + 10 * s, 18 * s, 9 * s);
-      ctx.fillStyle = '#eef2ff';
+      ctx.arc(cx, cy, 11 * s, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
       ctx.fill();
-      ctx.strokeStyle = withAlpha(color, 0.4);
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = withAlpha(color, 0.55);
+      ctx.lineWidth = 1.5;
       ctx.stroke();
-      ctx.fillStyle = '#475569';
-      ctx.fillText(label, cx + 5 * s, p0.y + h / 2);
+      // 内色点
+      ctx.beginPath();
+      ctx.arc(cx, cy, 3.5 * s, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      // 数量标签
+      ctx.fillStyle = '#64748b';
+      ctx.fillText(label, n.side === 'left' ? cx - 15 * s - labelW : cx + 15 * s, p0.y + h / 2);
     }
 
     if (isDrop) {
