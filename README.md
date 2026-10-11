@@ -18,9 +18,11 @@ apps/
 ## 快速开始
 
 ```bash
-npm install
-npm run demo        # 打开 http://localhost:5173，约 12k 演示节点
+make install   # 安装依赖
+make demo      # 启动脑图 demo（固定冷门端口 47213，避开常用端口）
 ```
+
+打开 http://localhost:47213，约 12k 演示节点。其他命令：`make help` 查看（`make mcp` 启动 MCP server、`make test`、`make typecheck`）。
 
 交互：滚轮平移、Ctrl/⌘+滚轮缩放、单击选中（侧边面板编辑）、双击改文本、节点右缘 `+N` 胶囊折叠/展开。
 
