@@ -9,6 +9,9 @@ import {
   NodeTypeRegistry,
   layoutTree,
   registerBuiltinTypes,
+  decodeXmind,
+  encodeXmind,
+  encodeMarkdown,
   type FlatNode,
   type MindNode,
 } from '@ai-mind-map/core';
@@ -399,17 +402,79 @@ document.getElementById('load-file')?.addEventListener('click', () => {
     f.text().then((t) => {
       try {
         store = DocStore.fromJSON(registry, JSON.parse(t));
-        selected = null;
-        expandedIds = null;
-        document.getElementById('doc-title')!.textContent = store.document.meta.title;
-        relayout();
-        renderPanel();
+        afterDocSwap();
       } catch (e) {
         alert(`加载失败：${(e as Error).message}`);
       }
     });
   };
   input.click();
+});
+
+// 文档替换后的公共收尾
+function afterDocSwap(): void {
+  selected = null;
+  expandedIds = null;
+  document.getElementById('doc-title')!.textContent = store.document.meta.title;
+  relayout();
+  renderPanel();
+  renderer.focusNode(store.root.id);
+}
+
+/** 下载二进制/文本文件 */
+function download(filename: string, data: BlobPart, type: string): void {
+  const blob = new Blob([data], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ---------- XMind / Markdown 导入导出 ----------
+document.getElementById('import-xmind')?.addEventListener('click', () => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.xmind';
+  input.onchange = () => {
+    const f = input.files?.[0];
+    if (!f) return;
+    f.arrayBuffer().then((buf) => {
+      try {
+        const { tree, warnings } = decodeXmind(new Uint8Array(buf), registry);
+        store = DocStore.fromJSON(registry, {
+          version: 1,
+          meta: { title: tree.text, updatedAt: new Date().toISOString() },
+          tree,
+          annotations: [],
+        });
+        afterDocSwap();
+        if (warnings.length) alert(`导入完成，有 ${warnings.length} 条警告：\n${warnings.slice(0, 5).join('\n')}`);
+      } catch (e) {
+        alert(`导入失败：${(e as Error).message}`);
+      }
+    });
+  };
+  input.click();
+});
+
+document.getElementById('export-xmind')?.addEventListener('click', () => {
+  try {
+    const bytes = encodeXmind(store.root, store.document.meta.title);
+    download(`${store.document.meta.title || 'mindmap'}.xmind`, bytes.slice().buffer as ArrayBuffer, 'application/octet-stream');
+  } catch (e) {
+    alert(`导出失败：${(e as Error).message}`);
+  }
+});
+
+document.getElementById('export-md')?.addEventListener('click', () => {
+  try {
+    const md = encodeMarkdown(store.root);
+    download(`${store.document.meta.title || 'mindmap'}.md`, md, 'text/markdown');
+  } catch (e) {
+    alert(`导出失败：${(e as Error).message}`);
+  }
 });
 
 // ---------- 启动 ----------

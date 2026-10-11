@@ -8,6 +8,8 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { loadOrCreate, save } from './store.js';
+import { writeFileSync, readFileSync } from 'node:fs';
+import { encodeXmind, encodeMarkdown } from '@ai-mind-map/core';
 
 interface SubtreeInput {
   type: string;
@@ -247,6 +249,38 @@ export function registerTools(
         const ann = store().setAnnotationStatus(annotationId, resolved ? 'resolved' : 'open');
         persist();
         return { content: [{ type: 'text', text: JSON.stringify(ann) }] };
+      } catch (e) {
+        return err(e);
+      }
+    },
+  );
+
+  // ---------- 导入/导出 ----------
+
+  server.tool(
+    'export_xmind',
+    '把当前导图导出为 .xmind 文件（Zen 格式；用例字段按 MeterSphere v3 中文键约定序列化为子主题，优先级为原生 marker）。',
+    { filePath: z.string().describe('输出的 .xmind 文件路径') },
+    async ({ filePath }) => {
+      try {
+        const bytes = encodeXmind(store().root, store().document.meta.title);
+        writeFileSync(filePath, bytes);
+        return { content: [{ type: 'text', text: `OK: ${filePath} (${bytes.length} bytes)` }] };
+      } catch (e) {
+        return err(e);
+      }
+    },
+  );
+
+  server.tool(
+    'export_markdown',
+    '导出为幕布式 Markdown 大纲（根 = # 一级标题，子级 = ##/###，深层嵌套列表；case 字段为列表项）。',
+    { filePath: z.string().describe('输出的 .md 文件路径') },
+    async ({ filePath }) => {
+      try {
+        const md = encodeMarkdown(store().root);
+        writeFileSync(filePath, md, 'utf8');
+        return { content: [{ type: 'text', text: `OK: ${filePath}` }] };
       } catch (e) {
         return err(e);
       }
