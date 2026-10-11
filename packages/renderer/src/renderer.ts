@@ -123,6 +123,10 @@ const ANIM_MS = 200;
 
 export class MindRenderer {
   private ctx: CanvasRenderingContext2D;
+  /** 主画布（draw 的 dpr 判定用；exportPNG 时 canvas 会被临时替换） */
+  private mainCanvas: HTMLCanvasElement;
+  /** 当前绘制目标（主画布或导出画布） */
+  private canvas: HTMLCanvasElement;
   private vp: Viewport = { scale: 1, offsetX: 0, offsetY: 0 };
   private nodes: FlatNode[] = [];
   private byId = new Map<string, FlatNode>();
@@ -144,6 +148,10 @@ export class MindRenderer {
   // 框选
   private marquee: { x0: number; y0: number; x1: number; y1: number } | null = null;
 
+  // 搜索命中高亮
+  private searchHits: Set<string> | null = null;
+  private currentHitId: string | null = null;
+
   // 拖拽
   private dragMode: 'pan' | 'node' | 'marquee' | null = null;
   private panStart = { x: 0, y: 0, ox: 0, oy: 0 };
@@ -153,9 +161,11 @@ export class MindRenderer {
   private dropPosition: 'child' | 'before' | 'after' = 'child';
 
   constructor(
-    private canvas: HTMLCanvasElement,
+    canvas: HTMLCanvasElement,
     private opts: RendererOptions = {},
   ) {
+    this.mainCanvas = canvas;
+    this.canvas = canvas;
     this.theme = { ...defaultTheme, ...opts.theme };
     this.ctx = canvas.getContext('2d')!;
     this.ro = new ResizeObserver(() => this.resize());
@@ -226,6 +236,71 @@ export class MindRenderer {
     this.multiSelected = new Set(ids);
     this.dirty = true;
     this.requestFrame();
+  }
+
+  /** 搜索命中高亮；hits=null 清除。current 是当前定位的那一条（画更重描边）。 */
+  setSearchHits(hits: Set<string> | null, current?: string | null): void {
+    this.searchHits = hits;
+    this.currentHitId = current ?? null;
+    this.dirty = true;
+    this.requestFrame();
+  }
+
+  get currentSearchHit(): string | null {
+    return this.currentHitId;
+  }
+
+  /**
+   * 离屏导出整张图：按所有节点的包围盒渲染到新 canvas，返回 dataURL。
+   * pixelScale 控制输出分辨率（相对世界坐标像素），上限保证最长边 ≤ 8192。
+   */
+  exportPNG(): string | null {
+    if (!this.nodes.length) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const n of this.nodes) {
+      x0 = Math.min(x0, n.x);
+      y0 = Math.min(y0, n.y);
+      x1 = Math.max(x1, n.x + n.w);
+      y1 = Math.max(y1, n.y + n.h);
+    }
+    const pad = 48;
+    x0 -= pad; y0 -= pad; x1 += pad; y1 += pad;
+    const w = x1 - x0;
+    const h = y1 - y0;
+    // 输出最长边目标 ≤ 8192（各浏览器 canvas 尺寸安全上限内）
+    const pixelScale = Math.min(2, 8192 / Math.max(w, h));
+    // 极端长宽比（全展开超大树）会缩成不可读的细条：拒绝导出，由调用方提示
+    if (Math.min(w, h) * pixelScale < 150) return null;
+    const out = document.createElement('canvas');
+    out.width = Math.round(w * pixelScale);
+    out.height = Math.round(h * pixelScale);
+    const octx = out.getContext('2d')!;
+
+    // 暂存现场：draw() 读取 canvas/ctx/vp/cssW/cssH，导出后恢复
+    const saved = { canvas: this.canvas, ctx: this.ctx, vp: this.vp, cssW: this.cssW, cssH: this.cssH, dpr: window.devicePixelRatio || 1 };
+    this.canvas = out;
+    this.ctx = octx;
+    this.cssW = w * pixelScale;
+    this.cssH = h * pixelScale;
+    this.vp = { scale: pixelScale, offsetX: -x0 * pixelScale, offsetY: -y0 * pixelScale };
+    const animSaved = this.anim;
+    const marqueeSaved = this.marquee;
+    this.anim = new Map();
+    this.marquee = null;
+    try {
+      this.draw();
+    } finally {
+      this.canvas = saved.canvas;
+      this.ctx = saved.ctx;
+      this.vp = saved.vp;
+      this.cssW = saved.cssW;
+      this.cssH = saved.cssH;
+      this.anim = animSaved;
+      this.marquee = marqueeSaved;
+      this.dirty = true;
+      this.requestFrame();
+    }
+    return out.toDataURL('image/png');
   }
 
   get multiSelectIds(): string[] {
@@ -402,10 +477,9 @@ export class MindRenderer {
       if (this.dragMoved) {
         const under = this.hitTest(sx, sy)?.node ?? null;
         const candidate = under && under.id !== this.dragNode.id ? under : null;
-        if (candidate) {
-          this.dropPosition = this.dropPositionAt(candidate, sy);
-        }
-        const changed = candidate?.id !== this.dropTargetId || (candidate && this.dropPosition !== this.dropPosition);
+        const pos = candidate ? this.dropPositionAt(candidate, sy) : null;
+        const changed = candidate?.id !== this.dropTargetId || (candidate && pos !== this.dropPosition);
+        this.dropPosition = pos ?? this.dropPosition;
         this.dropTargetId = candidate?.id ?? null;
         if (changed) {
           this.dirty = true;
@@ -563,19 +637,31 @@ export class MindRenderer {
 
   private draw(): void {
     const ctx = this.ctx;
-    const dpr = window.devicePixelRatio || 1;
+    // dpr = 画布物理像素 / 逻辑像素。导出画布上 offset/scale 已按像素给出，
+    // 用固定 1；主画布按 devicePixelRatio。
+    const dpr = this.canvas === this.mainCanvas ? window.devicePixelRatio || 1 : 1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = this.theme.canvasBg;
     ctx.fillRect(0, 0, this.cssW, this.cssH);
 
-    const rect = visibleWorldRect(this.vp, this.cssW, this.cssH);
+    // 动画期间节点可能从视口外滑入：按动画最大位移扩大裁剪框，而不是放弃裁剪
+    let extra = 0;
+    if (this.anim.size > 0) {
+      for (const n of this.nodes) {
+        const a = this.anim.get(n.id);
+        if (!a) continue;
+        extra = Math.max(extra, Math.abs(a.from.x - n.x), Math.abs(a.from.y - n.y));
+      }
+    }
+    const rect = visibleWorldRect(this.vp, this.cssW, this.cssH, 120 + extra);
     const visible: FlatNode[] = [];
+    const visibleParentIds = new Set<string>();
     for (const n of this.nodes) {
-      // 动画期间放宽裁剪（节点可能从视口外滑入）
-      if (this.anim.size > 0 || !(
+      if (!(
         n.x + n.w < rect.x0 || n.x > rect.x1 || n.y + n.h < rect.y0 || n.y > rect.y1
       )) {
         visible.push(n);
+        if (n.parentId) visibleParentIds.add(n.parentId);
       }
     }
 
@@ -584,7 +670,7 @@ export class MindRenderer {
       const p = this.byId.get(n.parentId);
       if (p) this.drawLink(p, n);
     }
-    for (const n of visible) this.drawNode(n);
+    for (const n of visible) this.drawNode(n, visibleParentIds);
 
     // marquee
     if (this.marquee && this.dragMoved) {
@@ -613,7 +699,8 @@ export class MindRenderer {
   private drawLink(p: FlatNode, n: FlatNode): void {
     const ctx = this.ctx;
     const s = this.vp.scale;
-    const x1 = p.x + p.w;
+    // 左侧子树的连线从父节点左缘出发（否则会横穿父节点框）
+    const x1 = n.side === 'left' ? p.x : p.x + p.w;
     const y1 = p.y + p.h / 2;
     const x2 = n.x;
     const y2 = n.y + n.h / 2;
@@ -632,7 +719,7 @@ export class MindRenderer {
     ctx.stroke();
   }
 
-  private drawNode(n: FlatNode): void {
+  private drawNode(n: FlatNode, visibleParentIds: Set<string>): void {
     const ctx = this.ctx;
     const s = this.vp.scale;
     const r = this.animRect(n);
@@ -681,6 +768,25 @@ export class MindRenderer {
       ctx.beginPath();
       ctx.roundRect(p0.x, p0.y, w, h, radius);
       ctx.fill();
+    }
+
+    // 搜索命中：淡色填充；当前定位项加琥珀描边
+    if (this.searchHits?.has(n.id)) {
+      const isCur = n.id === this.currentHitId;
+      ctx.beginPath();
+      ctx.roundRect(p0.x, p0.y, w, h, radius);
+      ctx.fillStyle = isCur ? 'rgba(245, 158, 11, 0.18)' : 'rgba(245, 158, 11, 0.08)';
+      ctx.fill();
+      if (isCur) {
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+        ctx.strokeStyle = isSel || isMulti
+          ? this.theme.selectionColor
+          : n.depth === 1
+            ? withAlpha(color, 0.35)
+            : this.theme.leafStroke;
+      }
     }
 
     // 文本（多行，左枝右对齐）
@@ -732,7 +838,7 @@ export class MindRenderer {
     }
 
     // 折叠指示
-    if (n.childCount > 0 && !this.hasVisibleChildren(n)) {
+    if (n.childCount > 0 && !visibleParentIds.has(n.id)) {
       const label = String(n.childCount);
       ctx.font = `500 ${Math.max(8, 11 * s)}px -apple-system, sans-serif`;
       const labelW = ctx.measureText(label).width;
@@ -787,9 +893,6 @@ export class MindRenderer {
     ctx.restore();
   }
 
-  private hasVisibleChildren(n: FlatNode): boolean {
-    return this.nodes.some((m) => m.parentId === n.id);
-  }
 }
 
 function textWOf(s: string, fs: number): number {

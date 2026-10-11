@@ -65,13 +65,20 @@ function blankDoc(title = '新导图'): MindDocument {
 const LS_KEY = 'ai-mind-map:doc';
 const LS_EXPANDED = 'ai-mind-map:expanded';
 
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 防抖写入：折叠/拖动等连续操作时不逐次序列化大文档 */
 function saveLocal(): void {
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify(doc));
-    localStorage.setItem(LS_EXPANDED, JSON.stringify([...(expandedIds ?? [])]));
-  } catch {
-    /* 存储满/禁用时静默 */
-  }
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(doc));
+      localStorage.setItem(LS_EXPANDED, JSON.stringify([...(expandedIds ?? [])]));
+    } catch {
+      /* 存储满/禁用时静默 */
+    }
+  }, 800);
 }
 
 function loadLocal(): MindDocument | null {
@@ -277,9 +284,13 @@ function dropNode(id: string, target: FlatNode | null, position: 'child' | 'befo
     // 成为兄弟：挂到 target 的父下，插到 target 前/后
     const p = store.getParent(target.id);
     if (!p) return;
-    const siblings = p.children ?? [];
-    const idx = siblings.findIndex((s) => s.id === target.id);
-    store.moveSubtree(id, p.id, position === 'before' ? idx : idx + 1);
+    const sameParent = p.id === store.getParent(id)!.id;
+    const idx = (p.children ?? []).findIndex((s) => s.id === target.id);
+    // moveSubtree 先从旧位置移除再插入；同父时删除会使 target 及其索引左移一位
+    const insertAt = sameParent
+      ? (position === 'before' ? (idx > 0 ? idx - 1 : 0) : idx)
+      : (position === 'before' ? idx : idx + 1);
+    store.moveSubtree(id, p.id, insertAt);
   }
   relayout();
   renderer.focusNode(id);
@@ -349,6 +360,13 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (e.shiftKey) redo();
     else undo();
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault();
+    searchBox.style.display = 'flex';
+    searchInput.focus();
+    searchInput.select();
     return;
   }
   if (editingNodeId) return;
@@ -446,6 +464,89 @@ function navigateUD(delta: number): void {
   selectId(siblings[next]!.id);
 }
 
+// ---------- 搜索定位（⌘F） ----------
+const searchBox = document.getElementById('search-box') as HTMLDivElement;
+const searchInput = document.getElementById('search-input') as HTMLInputElement;
+const searchMeta = document.getElementById('search-meta') as HTMLElement;
+let searchMatches: string[] = [];
+let searchCursor = 0;
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+function runSearch(): void {
+  const q = searchInput.value.trim().toLowerCase();
+  searchMatches = [];
+  searchCursor = 0;
+  if (!q) {
+    searchMeta.textContent = '';
+    renderer.setSearchHits(null);
+    return;
+  }
+  for (const n of lastFlat) {
+    if (n.text.toLowerCase().includes(q)) searchMatches.push(n.id);
+  }
+  searchMeta.textContent = searchMatches.length
+    ? `${searchCursor + 1}/${searchMatches.length}`
+    : '无结果';
+  renderer.setSearchHits(new Set(searchMatches));
+  if (searchMatches.length) focusSearchHit();
+}
+
+function focusSearchHit(): void {
+  const id = searchMatches[searchCursor];
+  if (!id) return;
+  // 命中节点可能藏在折叠子树里：先展开祖先链
+  ensureExpandedInit();
+  let cur = store.getParent(id);
+  while (cur) {
+    expandedIds!.add(cur.id);
+    cur = store.getParent(cur.id);
+  }
+  relayout();
+  selectId(id);
+  renderer.setSearchHits(searchMatches.length ? new Set(searchMatches) : null, id);
+  renderer.focusNode(id);
+}
+
+function ensureExpandedInit(): void {
+  if (expandedIds) return;
+  expandedIds = new Set();
+  const walk = (n: MindNode, d: number): void => {
+    if (d < 2) {
+      expandedIds!.add(n.id);
+      for (const c of n.children ?? []) walk(c, d + 1);
+    }
+  };
+  walk(store.root, 0);
+}
+
+searchInput.addEventListener('input', () => {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(runSearch, 150);
+});
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (!searchMatches.length) {
+      runSearch();
+      return;
+    }
+    searchCursor = (searchCursor + 1) % searchMatches.length;
+    searchMeta.textContent = `${searchCursor + 1}/${searchMatches.length}`;
+    focusSearchHit();
+  } else if (e.key === 'Escape') {
+    closeSearch();
+  }
+});
+function closeSearch(): void {
+  searchBox.style.display = 'none';
+  searchInput.value = '';
+  searchMeta.textContent = '';
+  searchMatches = [];
+  renderer.setSearchHits(null);
+  searchInput.blur();
+}
+document.getElementById('search-close')?.addEventListener('click', closeSearch);
+
 // ---------- 右键菜单 ----------
 const ctxMenuEl = document.getElementById('ctx-menu') as HTMLDivElement;
 
@@ -511,8 +612,7 @@ function outdent(id: string): void {
   const grandparent = store.getParent(parent.id);
   if (!grandparent) return;
   snapshot();
-  store.moveSubtree(id, grandparent.id);
-  // 放到原父节点后面
+  // 在自身移除前取原父在祖父下的索引；moveSubtree 移除自身后插入即恰好落在原父之后
   const idx = (grandparent.children ?? []).findIndex((c) => c.id === parent.id);
   store.moveSubtree(id, grandparent.id, idx + 1);
   relayout();
@@ -811,6 +911,72 @@ function threadHtml(a: {
   </div>`;
 }
 
+// ---------- 大纲视图（幕布式） ----------
+const outlinePane = document.getElementById('outline-pane') as HTMLDivElement;
+const viewToggleBtn = document.getElementById('view-toggle') as HTMLButtonElement;
+let outlineMode = false;
+let outlineCollapsed = new Set<string>();
+
+function outlineHtml(): string {
+  const render = (n: MindNode, depth: number): string => {
+    const kids = n.children ?? [];
+    const collapsed = outlineCollapsed.has(n.id);
+    const priority = (n.props as { priority?: string }).priority;
+    const toggle = kids.length
+      ? `<span class="o-toggle" data-toggle="${n.id}" style="cursor:pointer;display:inline-block;width:16px;text-align:center;color:#94a3b8;font-size:11px;user-select:none">${collapsed ? '▸' : '▾'}</span>`
+      : '<span style="display:inline-block;width:16px"></span>';
+    const badge = priority && depth > 0 ? `<span class="o-badge" style="font-size:10px;background:#e2e8f0;border-radius:4px;padding:1px 5px;margin-left:6px;color:#475569">${escapeHtml(priority)}</span>` : '';
+    return `
+      <div class="o-row" data-node="${n.id}" style="margin-left:${depth * 22}px;display:flex;align-items:baseline;gap:2px;padding:3px 6px;border-radius:6px">
+        ${toggle}${badge}
+        <span class="o-text" contenteditable="plaintext-only" data-otext="${n.id}" style="flex:1;outline:none;border-radius:4px;padding:2px 6px">${escapeHtml(n.text)}</span>
+        <span style="font-size:10px;color:#cbd5e1;user-select:none">${kids.length ? `${kids.length}` : ''}</span</span>
+      </div>
+      ${!collapsed && kids.length ? kids.map((k) => render(k, depth + 1)).join('') : ''}
+    `;
+  };
+  return render(store.root, 0);
+}
+
+function renderOutline(): void {
+  outlinePane.innerHTML = outlineHtml();
+}
+
+function toggleOutline(): void {
+  outlineMode = !outlineMode;
+  viewToggleBtn.textContent = outlineMode ? '画布视图' : '大纲视图';
+  outlinePane.style.display = outlineMode ? 'block' : 'none';
+  if (outlineMode) renderOutline();
+}
+
+viewToggleBtn.addEventListener('click', toggleOutline);
+
+// 大纲内编辑：失焦提交文本
+outlinePane.addEventListener('focusout', (e) => {
+  const span = (e.target as HTMLElement).closest('[data-otext]') as HTMLElement | null;
+  if (!span) return;
+  const id = span.dataset.otext!;
+  const node = store.getNode(id);
+  const next = span.textContent?.trim() ?? '';
+  if (node && next && next !== node.text) {
+    snapshot();
+    store.updateNode(id, { text: next });
+    relayout();
+  } else if (node && !next) {
+    span.textContent = node.text; // 空文本回滚
+  }
+});
+
+// 折叠切换
+outlinePane.addEventListener('click', (e) => {
+  const t = (e.target as HTMLElement).closest('[data-toggle]') as HTMLElement | null;
+  if (!t) return;
+  const id = t.dataset.toggle!;
+  if (outlineCollapsed.has(id)) outlineCollapsed.delete(id);
+  else outlineCollapsed.add(id);
+  renderOutline();
+});
+
 // ---------- 导入/导出 ----------
 function download(filename: string, data: BlobPart, type: string): void {
   const blob = new Blob([data], { type });
@@ -863,6 +1029,18 @@ document.getElementById('export-md')?.addEventListener('click', () => {
   } catch (e) {
     alert(`导出失败：${(e as Error).message}`);
   }
+});
+
+document.getElementById('export-png')?.addEventListener('click', () => {
+  const url = renderer.exportPNG();
+  if (!url) {
+    alert('当前导图过大（全展开超过 5 万节点高度），导出会小到不可读。\n请先折叠部分分支（右键 → 展开折叠 / 全部折叠按钮）再导出 PNG。');
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${store.document.meta.title || 'mindmap'}.png`;
+  a.click();
 });
 
 // ---------- 工具条 ----------
@@ -974,6 +1152,20 @@ editorEl().addEventListener('keydown', (e) => {
   }
 });
 // 手动 commitEdit 绑定后 reattach：blur 触发在 display:none 之前调用
+
+// 防抖期间关闭页面时立即落盘
+window.addEventListener('beforeunload', () => {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(doc));
+      localStorage.setItem(LS_EXPANDED, JSON.stringify([...(expandedIds ?? [])]));
+    } catch {
+      /* ignore */
+    }
+  }
+});
 
 // ---------- 启动 ----------
 const stored = loadLocal();
