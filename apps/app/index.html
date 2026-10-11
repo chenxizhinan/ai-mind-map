@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ai-mind-map</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body, #app { height: 100%; overflow: hidden; }
+      body {
+        font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+        color: #1e293b;
+        background: #f6f7fb;
+        font-size: 14px;
+      }
+      #app { display: flex; flex-direction: column; }
+
+      header {
+        display: flex; align-items: center; gap: 8px;
+        padding: 8px 14px;
+        background: #fff; border-bottom: 1px solid #e2e8f0;
+        flex-wrap: nowrap; overflow-x: auto;
+      }
+      header .title { font-weight: 600; font-size: 14px; white-space: nowrap; }
+      header .stats { color: #64748b; font-size: 12px; white-space: nowrap; }
+      header .spacer { flex: 1; }
+      header button, header select {
+        font-size: 13px; padding: 5px 10px;
+        border: 1px solid #cbd5e1; border-radius: 6px; background: #fff;
+        cursor: pointer; white-space: nowrap;
+      }
+      header button.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+
+      main { flex: 1; display: flex; min-height: 0; }
+
+      #canvas-wrap { position: relative; flex: 1; min-width: 0; cursor: grab; }
+      #canvas { position: absolute; inset: 0; }
+
+      #overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+      #node-editor {
+        position: absolute; pointer-events: auto;
+        font-size: 14px; line-height: 22px;
+        padding: 6px 8px;
+        border: 2px solid #2563eb; border-radius: 8px;
+        background: #fff; outline: none;
+        min-width: 140px; display: none;
+      }
+
+      /* 右键菜单 */
+      #ctx-menu {
+        position: fixed; z-index: 1000;
+        background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
+        box-shadow: 0 10px 40px rgba(15, 23, 42, 0.14);
+        padding: 6px; min-width: 180px;
+        display: none;
+      }
+      #ctx-menu .item {
+        padding: 7px 12px; border-radius: 7px; cursor: pointer;
+        display: flex; justify-content: space-between; gap: 18px;
+        font-size: 13px;
+      }
+      #ctx-menu .item:hover { background: #f1f5f9; }
+      #ctx-menu .item .kbd { color: #94a3b8; font-size: 11px; }
+      #ctx-menu .divider { height: 1px; background: #e2e8f0; margin: 5px 8px; }
+      #ctx-menu .item.disabled { color: #cbd5e1; cursor: default; }
+      #ctx-menu .item.danger { color: #dc2626; }
+      #ctx-menu .item.danger:hover { background: #fef2f2; }
+
+      /* 缩放工具条 */
+      #zoom-bar {
+        position: absolute; left: 14px; bottom: 14px; z-index: 50;
+        display: flex; gap: 2px;
+        background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
+        padding: 4px; box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+      }
+      #zoom-bar button {
+        border: none; background: transparent; cursor: pointer;
+        width: 30px; height: 28px; border-radius: 6px; font-size: 15px; color: #475569;
+      }
+      #zoom-bar button:hover { background: #f1f5f9; }
+      #zoom-bar .pct { font-size: 12px; color: #64748b; align-self: center; min-width: 44px; text-align: center; }
+
+      /* 侧边面板 */
+      aside {
+        width: 340px; flex-shrink: 0;
+        background: #fff; border-left: 1px solid #e2e8f0;
+        display: flex; flex-direction: column;
+      }
+      .panel-head { padding: 12px 16px; border-bottom: 1px solid #e2e8f0; }
+      .panel-head .node-path { font-size: 12px; color: #64748b; margin-bottom: 4px; word-break: break-all; }
+      .panel-head .node-title { font-size: 15px; font-weight: 600; word-break: break-all; }
+      .tabs { display: flex; border-bottom: 1px solid #e2e8f0; }
+      .tab {
+        flex: 1; text-align: center; padding: 9px 0; font-size: 13px;
+        color: #64748b; cursor: pointer; border-bottom: 2px solid transparent;
+        user-select: none;
+      }
+      .tab.active { color: #2563eb; border-bottom-color: #2563eb; font-weight: 500; }
+      .tab .badge-count {
+        display: inline-block; min-width: 16px; padding: 0 4px; margin-left: 2px;
+        background: #dc2626; color: #fff; border-radius: 8px; font-size: 10px;
+      }
+      .panel-body { flex: 1; overflow-y: auto; padding: 14px 16px; font-size: 13px; }
+      .field { margin-bottom: 12px; }
+      .field label { display: block; font-size: 12px; color: #64748b; margin-bottom: 4px; }
+      .field input, .field textarea, .field select {
+        width: 100%; font-size: 13px; padding: 7px 9px;
+        border: 1px solid #cbd5e1; border-radius: 6px; background: #fff;
+        font-family: inherit;
+      }
+      .field textarea { resize: vertical; min-height: 54px; }
+      .btn-row { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+      .btn {
+        padding: 6px 12px; font-size: 13px; border-radius: 6px;
+        border: 1px solid #cbd5e1; background: #fff; cursor: pointer;
+      }
+      .btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+      .btn:disabled { opacity: 0.5; cursor: default; }
+
+      .thread { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+      .thread .meta { font-size: 11px; color: #94a3b8; margin-bottom: 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+      .thread .who { font-weight: 600; color: #475569; }
+      .thread .who.ai { color: #7c3aed; }
+      .thread .status-chip { font-size: 10px; padding: 1px 6px; border-radius: 8px; }
+      .thread .status-chip.open { background: #fef3c7; color: #b45309; }
+      .thread .status-chip.resolved { background: #dcfce7; color: #15803d; }
+      .thread .body { font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+      .thread .reply { margin-top: 8px; padding-left: 10px; border-left: 2px solid #e2e8f0; }
+      .thread .reply .body { font-size: 12px; }
+      .thread .actions { margin-top: 8px; display: flex; gap: 6px; }
+      .thread .actions button { font-size: 12px; padding: 3px 8px; }
+      .reply-box textarea { width: 100%; min-height: 36px; margin-top: 8px; }
+
+      footer.hint {
+        padding: 6px 14px; border-top: 1px solid #e2e8f0;
+        font-size: 11px; color: #94a3b8; background: #fff;
+        display: flex; gap: 14px; flex-wrap: wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <span class="title" id="doc-title">ai-mind-map</span>
+        <span class="stats" id="stats"></span>
+        <span class="spacer"></span>
+        <button id="btn-undo" title="撤销 (⌘Z)">↩ 撤销</button>
+        <button id="btn-redo" title="重做 (⌘⇧Z)">↪ 重做</button>
+        <button id="import-xmind">导入 XMind</button>
+        <button id="export-xmind">导出 XMind</button>
+        <button id="export-md">导出 MD</button>
+        <button id="btn-expand-all">全部展开</button>
+        <button id="btn-collapse-all">全部折叠</button>
+        <button id="btn-add-case" class="primary">+ 用例</button>
+      </header>
+      <main>
+        <div id="canvas-wrap">
+          <canvas id="canvas"></canvas>
+          <div id="overlay"><div id="node-editor" contenteditable="plaintext-only"></div></div>
+          <div id="zoom-bar">
+            <button id="zoom-out" title="缩小">−</button>
+            <span class="pct" id="zoom-pct">100%</span>
+            <button id="zoom-in" title="放大">＋</button>
+            <button id="zoom-fit" title="适应全图">⤢</button>
+          </div>
+        </div>
+        <aside id="panel">
+          <div id="panel-empty" style="margin:auto;color:#94a3b8;font-size:13px;text-align:center">
+            选中节点查看详情<br/>
+            <span style="font-size:11px">Tab 新建子节点 · Enter 新建同级 · Del 删除<br/>双击编辑文本 · 拖拽移动子树 · 右键更多操作</span>
+          </div>
+        </aside>
+      </main>
+      <footer class="hint">
+        <span>Tab/Insert：新建子节点</span>
+        <span>Enter：新建同级节点</span>
+        <span>⌘Z / ⌘⇧Z：撤销/重做</span>
+        <span>Space/Enter 开头：折叠/展开</span>
+        <span>方向键：在节点间导航</span>
+        <span>F2：编辑文本</span>
+        <span>Del/Backspace：删除</span>
+        <span>⌘C/⌘V：复制/粘贴子树</span>
+      </footer>
+      <div id="ctx-menu"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

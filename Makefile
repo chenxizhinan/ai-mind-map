@@ -11,8 +11,8 @@ help: ## 显示可用命令
 install: ## 安装依赖
 	npm install
 
-demo: ## 启动脑图 demo（http://localhost:$(PORT)）
-	npx vite apps/demo --port $(PORT) --strictPort
+demo: ## 启动脑图应用（http://localhost:$(PORT)）
+	npx vite apps/app --port $(PORT) --strictPort
 
 dev: demo ## 同 demo
 

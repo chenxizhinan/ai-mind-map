@@ -73,10 +73,10 @@ export interface FlatNode {
   hidden: boolean;
   /** 直接子节点数 */
   childCount: number;
-}
-
-/** 树的持久化快照（可选导出用） */
-export interface TreeSnapshot {
-  nodes: MindNode[];
-  assignedIds: string[];
+  /** 相对根的侧向：地图布局下根左侧为 'left' */
+  side?: 'left' | 'right';
+  /** 顶层分支序号（用于按分支着色） */
+  branch?: number;
+  /** 换行后的文本行（布局阶段测量） */
+  lines?: string[];
 }

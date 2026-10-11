@@ -14,8 +14,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "demo": "vite apps/demo --port 5173 --strictPort",
-    "mcp": "tsx packages/mcp-server/src/cli.ts"
+    "demo": "vite apps/app --port 47213 --strictPort",
+    "mcp": "tsx packages/mcp-server/src/cli.ts",
+    "dev": "vite apps/app --port 47213 --strictPort"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

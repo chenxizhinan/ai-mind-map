@@ -83,19 +83,19 @@ describe('XMind roundtrip', () => {
 
   it('导出的 case 字段子主题符合 MeterSphere 中文键约定', () => {
     const zen = buildXmindRootTopic(sampleTree());
-    const login = zen.children!.attached[0]!;
-    const c1 = login.children!.attached[0]!;
-    const titles = (c1.children?.attached ?? []).map((t) => t.title);
+    const login = zen.children?.attached?.[0];
+    const c1 = login?.children?.attached?.[0];
+    expect(c1).toBeTruthy();
+    const titles = (c1?.children?.attached ?? []).map((t) => t.title);
     expect(titles).toContain('前置条件：已注册用户');
     // 步骤在「步骤描述：」分组下，预期结果嵌在首个步骤下
-    const stepsGroup = (c1.children?.attached ?? []).find((t) => t.title === '步骤描述：');
+    const stepsGroup = (c1?.children?.attached ?? []).find((t) => t.title === '步骤描述：');
     expect(stepsGroup).toBeTruthy();
-    const stepTitles = (stepsGroup!.children?.attached ?? []).map((t) => t.title);
+    const stepTitles = (stepsGroup?.children?.attached ?? []).map((t) => t.title);
     expect(stepTitles.some((t) => /^步骤\d+：/.test(t!))).toBe(true);
-    const firstStep = stepsGroup!.children!.attached[0]!;
+    const firstStep = stepsGroup!.children!.attached![0]!;
     expect((firstStep.children?.attached ?? []).some((t) => t.title!.startsWith('预期结果：'))).toBe(true);
-    // 优先级 marker：P1 → priority-2
-    expect(c1.markers).toEqual([{ markerId: 'priority-2' }]);
+    expect(c1!.markers).toEqual([{ markerId: 'priority-2' }]);
   });
 });
 
