@@ -134,8 +134,11 @@ const renderer = new MindRenderer(canvasEl, {
     selected = n;
     renderPanel();
   },
+  onMultiSelect: (ids) => {
+    showBatchBar(ids);
+  },
   onToggleCollapse: (n) => toggleCollapse(n.id),
-  onDrop: (node, target) => moveNode(node.id, target?.id ?? null),
+  onDrop: (node, target, position) => dropNode(node.id, target, position),
   onContextMenu: (node, screen) => showCtxMenu(node, screen),
   onActivate: (n) => startEdit(n.id),
 });
@@ -243,6 +246,55 @@ function moveNode(id: string, targetId: string | null): void {
   store.moveSubtree(id, targetId);
   relayout();
   renderer.focusNode(id);
+}
+
+/**
+ * 拖放落点：child=挂到 target 下；before/after=成为 target 的兄弟（插到其前/后）。
+ */
+function dropNode(id: string, target: FlatNode | null, position: 'child' | 'before' | 'after'): void {
+  if (!target) return;
+  const node = store.getNode(id);
+  const t = store.getNode(target.id);
+  if (!node || !t) return;
+  if (id === target.id) return;
+  // 防环
+  let up: MindNode | undefined = t;
+  while (up) {
+    if (up.id === id) {
+      alert('不能移动到自身或自己的后代之下');
+      return;
+    }
+    up = store.getParent(up.id);
+  }
+  snapshot();
+  if (position === 'child') {
+    if (registry.get(t.type).leafOnly) {
+      alert('用例节点不能再添加子节点');
+      return;
+    }
+    store.moveSubtree(id, t.id);
+  } else {
+    // 成为兄弟：挂到 target 的父下，插到 target 前/后
+    const p = store.getParent(target.id);
+    if (!p) return;
+    const siblings = p.children ?? [];
+    const idx = siblings.findIndex((s) => s.id === target.id);
+    store.moveSubtree(id, p.id, position === 'before' ? idx : idx + 1);
+  }
+  relayout();
+  renderer.focusNode(id);
+}
+
+/** 框选后的批量操作条 */
+function showBatchBar(ids: string[]): void {
+  const bar = document.getElementById('batch-bar') as HTMLElement;
+  if (!ids.length) {
+    bar.style.display = 'none';
+    return;
+  }
+  bar.style.display = 'flex';
+  bar.dataset.count = String(ids.length);
+  (document.getElementById('batch-count') as HTMLElement).textContent = `已选 ${ids.length} 个节点`;
 }
 
 function startEdit(id: string): void {
@@ -403,6 +455,7 @@ function showCtxMenu(node: FlatNode, screen: { x: number; y: number }): void {
     { label: '新建子节点', kbd: 'Tab', action: () => (store.getNode(node.id)!.type === 'case' ? addSibling(node.id) : addChild(node.id)) },
     { label: '新建同级节点', kbd: 'Enter', action: () => addSibling(node.id), },
     { label: '编辑文本', kbd: 'F2', action: () => startEdit(node.id) },
+    { label: '设置节点颜色…', action: () => showStylePanel(node.id) },
     { label: '展开/折叠', kbd: 'Space', action: () => toggleCollapse(node.id), divider: true },
     { label: '复制子树', kbd: '⌘C', action: () => { clipboard = JSON.stringify(store.getNode(node.id)); } },
     { label: '粘贴子树', kbd: '⌘V', action: () => pasteUnder(node.id) },
@@ -476,6 +529,78 @@ function convertType(id: string, newType: string): void {
     alert((e as Error).message);
   }
 }
+
+// ---------- 样式面板与批量操作 ----------
+const PALETTE = ['#2563eb', '#0891b2', '#16a34a', '#ca8a04', '#ea580c', '#dc2626', '#7c3aed', '#db2777', '#64748b', '#0f172a'];
+
+/** 单节点样式面板（右键 → 设置节点颜色） */
+function showStylePanel(nodeId: string): void {
+  const menu = ctxMenuEl;
+  const node = store.getNode(nodeId);
+  if (!node) return;
+  const current = String((node.props as { color?: string }).color ?? '');
+  const swatches = PALETTE.map(
+    (c) =>
+      `<div class="swatch" data-color="${c}" style="width:26px;height:26px;border-radius:7px;background:${c};cursor:pointer;${current === c ? 'outline:2px solid #1e293b;outline-offset:2px;' : ''}"></div>`,
+  ).join('');
+  menu.innerHTML = `
+    <div style="padding:10px 12px;display:flex;gap:8px;flex-wrap:wrap;max-width:220px">
+      ${swatches}
+      ${current ? '<div class="swatch" data-color="" title="清除颜色" style="width:26px;height:26px;border-radius:7px;border:1px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:11px;color:#94a3b8">✕</div>' : ''}
+    </div>
+  `;
+  menu.style.display = 'block';
+  menu.querySelectorAll('.swatch').forEach((el) => {
+    el.addEventListener('click', () => {
+      const color = (el as HTMLElement).dataset.color || '';
+      snapshot();
+      store.updateNode(nodeId, { props: { color: color || undefined } });
+      relayout();
+      hideCtxMenu();
+    });
+  });
+}
+
+/** 批量操作条事件绑定 */
+document.getElementById('batch-delete')?.addEventListener('click', () => {
+  const ids = renderer.multiSelectIds;
+  if (!ids.length) return;
+  snapshot();
+  for (const id of ids) {
+    if (id !== store.root.id && store.getNode(id)) store.deleteSubtree(id);
+  }
+  renderer.setMultiSelect([]);
+  showBatchBar([]);
+  relayout();
+});
+document.getElementById('batch-color')?.addEventListener('click', () => {
+  const ids = renderer.multiSelectIds;
+  if (!ids.length) return;
+  const color = PALETTE[Math.floor(Math.random() * PALETTE.length)]!;
+  snapshot();
+  for (const id of ids) {
+    const n = store.getNode(id);
+    if (n) store.updateNode(id, { props: { color } });
+  }
+  relayout();
+});
+document.getElementById('batch-priority')?.addEventListener('click', () => {
+  const ids = renderer.multiSelectIds;
+  if (!ids.length) return;
+  const order = ['P0', 'P1', 'P2', 'P3', ''] as const;
+  // 轮转：P0→P1→P2→P3→未设置→P0
+  const current = String((store.getNode(ids[0]!)?.props as { priority?: string })?.priority ?? '');
+  const next = order[(order.indexOf(current as never) + 1) % order.length]!;
+  snapshot();
+  for (const id of ids) {
+    store.updateNode(id, { props: { priority: next || undefined } });
+  }
+  relayout();
+});
+document.getElementById('batch-cancel')?.addEventListener('click', () => {
+  renderer.setMultiSelect([]);
+  showBatchBar([]);
+});
 
 // ---------- 侧边面板 ----------
 const aside = document.getElementById('panel') as HTMLElement;

@@ -188,6 +188,13 @@
         <span>Del：删除</span>
         <span>⌘C/⌘V：复制/粘贴子树</span>
       </footer>
+      <div id="batch-bar" style="display:none;position:fixed;top:48px;left:50%;transform:translateX(-50%);z-index:90;align-items:center;gap:8px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:6px 10px;box-shadow:0 8px 30px rgba(15,23,42,0.16)">
+        <span id="batch-count" style="font-size:12px;color:#475569;white-space:nowrap"></span>
+        <button class="btn" id="batch-color" title="给选中节点设置分支色">改色</button>
+        <button class="btn" id="batch-priority" title="批量设置优先级">优先级</button>
+        <button class="btn danger" id="batch-delete" style="color:#dc2626;border-color:#fca5a5">删除</button>
+        <button class="btn" id="batch-cancel">取消</button>
+      </div>
       <div id="ctx-menu"></div>
     </div>
     <script type="module" src="/src/main.ts"></script>

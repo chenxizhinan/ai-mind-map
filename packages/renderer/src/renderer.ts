@@ -3,9 +3,11 @@
  *
  * - XMind 风格连线：宽度与透明度随深度衰减、按顶层分支着色
  * - 多行文本渲染（布局阶段已换行），左枝右对齐
- * - 悬浮/选中态、折叠胶囊、批注角标、优先级徽标、拖拽目标虚线
- * - 视口裁剪 + rAF 脏帧调度（静止零开销）
- * - 交互回调：选择 / 折叠 / 激活 / 右键 / 拖放
+ * - 布局动画：节点位置/尺寸缓动过渡（200ms，数据变更时自动触发）
+ * - 框选多选：空白处拖拽画 marquee，命中节点进入多选集合
+ * - 拖拽指示：目标中间=子节点（虚线框），上/下边缘=兄弟节点（插入线）
+ * - 悬浮/选中态、折叠胶囊、批注角标、优先级徽标
+ * - 视口裁剪 + rAF 脏帧调度
  */
 import type { FlatNode } from '@ai-mind-map/core';
 import { visibleWorldRect, worldToScreen, type Viewport } from './viewport.js';
@@ -25,6 +27,9 @@ export interface Theme {
   hoverOverlay: string;
   badgeColors: Record<string, string>;
   annBadgeFill: string;
+  marqueeFill: string;
+  marqueeStroke: string;
+  insertLine: string;
 }
 
 export const defaultTheme: Theme = {
@@ -45,16 +50,23 @@ export const defaultTheme: Theme = {
   hoverOverlay: 'rgba(37, 99, 235, 0.08)',
   badgeColors: { P0: '#dc2626', P1: '#ea580c', P2: '#2563eb', P3: '#94a3b8' },
   annBadgeFill: '#dc2626',
+  marqueeFill: 'rgba(37, 99, 235, 0.06)',
+  marqueeStroke: 'rgba(37, 99, 235, 0.5)',
+  insertLine: '#dc2626',
 };
 
 export interface RendererOptions {
   theme?: Partial<Theme>;
   onSelect?: (node: FlatNode | null) => void;
+  /** 多选变化（框选/追加） */
+  onMultiSelect?: (ids: string[]) => void;
   onToggleCollapse?: (node: FlatNode) => void;
   onActivate?: (node: FlatNode) => void;
   onContextMenu?: (node: FlatNode, screen: { x: number; y: number }) => void;
-  /** 拖放：把 node 子树挂到 target 下（target null = 顶层移动，应用层可拒绝） */
-  onDrop?: (node: FlatNode, target: FlatNode | null) => void;
+  /**
+   * 拖放。position: 'child' 挂到 target 下；'before'/'after' 成为 target 的兄弟。
+   */
+  onDrop?: (node: FlatNode, target: FlatNode | null, position: 'child' | 'before' | 'after') => void;
 }
 
 /** 内置主题：默认（清爽蓝）/ 黑金（商务）/ 森绿（护眼） */
@@ -97,6 +109,18 @@ function withAlpha(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+/** 动画帧上的节点视觉状态 */
+interface AnimState {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** 1 = 完全显示，0 = 未出现（新节点淡入） */
+  alpha: number;
+}
+
+const ANIM_MS = 200;
+
 export class MindRenderer {
   private ctx: CanvasRenderingContext2D;
   private vp: Viewport = { scale: 1, offsetX: 0, offsetY: 0 };
@@ -106,11 +130,27 @@ export class MindRenderer {
   private dirty = true;
   private rafId = 0;
   private selectedId: string | null = null;
+  private multiSelected = new Set<string>();
   private hoveredId: string | null = null;
   private theme: Theme;
   private ro: ResizeObserver;
   private cssW = 0;
   private cssH = 0;
+
+  // 动画：nodeId → 当前渲染态（从上一位置向 setData 目标位置过渡）
+  private anim = new Map<string, { from: { x: number; y: number; w: number; h: number; alpha: number }; start: number }>();
+  private animating = false;
+
+  // 框选
+  private marquee: { x0: number; y0: number; x1: number; y1: number } | null = null;
+
+  // 拖拽
+  private dragMode: 'pan' | 'node' | 'marquee' | null = null;
+  private panStart = { x: 0, y: 0, ox: 0, oy: 0 };
+  private dragNode: FlatNode | null = null;
+  private dragMoved = false;
+  private dropTargetId: string | null = null;
+  private dropPosition: 'child' | 'before' | 'after' = 'child';
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -125,9 +165,30 @@ export class MindRenderer {
   }
 
   setData(nodes: FlatNode[], openAnnCounts?: Map<string, number>): void {
+    const prevRects = new Map(this.byId);
     this.nodes = nodes;
     this.byId = new Map(nodes.map((n) => [n.id, n]));
     this.openAnnCounts = openAnnCounts ?? new Map();
+    // 记录动画起点：旧位置（或淡入）
+    const now = performance.now();
+    for (const n of nodes) {
+      const prev = prevRects.get(n.id);
+      if (prev) {
+        if (prev.x !== n.x || prev.y !== n.y || prev.w !== n.w || prev.h !== n.h) {
+          this.anim.set(n.id, {
+            from: { x: prev.x, y: prev.y, w: prev.w, h: prev.h, alpha: 1 },
+            start: now,
+          });
+        }
+      } else if (!this.anim.has(n.id)) {
+        // 新节点：从自身位置淡入
+        this.anim.set(n.id, {
+          from: { x: n.x, y: n.y, w: n.w, h: n.h, alpha: 0 },
+          start: now,
+        });
+      }
+    }
+    this.startAnimLoop();
     this.dirty = true;
     this.requestFrame();
   }
@@ -138,7 +199,6 @@ export class MindRenderer {
     this.requestFrame();
   }
 
-  /** 运行时切换主题（合并到默认主题） */
   setTheme(t: Partial<Theme>): void {
     this.theme = { ...defaultTheme, ...t };
     this.dirty = true;
@@ -151,8 +211,25 @@ export class MindRenderer {
 
   select(id: string | null): void {
     this.selectedId = id;
+    if (id) {
+      this.multiSelected.clear();
+      this.multiSelected.add(id);
+    } else {
+      this.multiSelected.clear();
+    }
     this.dirty = true;
     this.requestFrame();
+  }
+
+  /** 设置多选集合（不改变单选） */
+  setMultiSelect(ids: string[]): void {
+    this.multiSelected = new Set(ids);
+    this.dirty = true;
+    this.requestFrame();
+  }
+
+  get multiSelectIds(): string[] {
+    return [...this.multiSelected];
   }
 
   focusNode(id: string): void {
@@ -171,11 +248,9 @@ export class MindRenderer {
     const wy = (sy - this.vp.offsetY) / this.vp.scale;
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i];
-      // 框内
       if (wx >= n.x && wx <= n.x + n.w && wy >= n.y && wy <= n.y + n.h) {
         return { node: n, zone: 'body' };
       }
-      // 折叠胶囊（框外侧，随方向）
       if (n.childCount > 0) {
         const pad = 30 / this.vp.scale;
         const halfH = 11 / this.vp.scale;
@@ -188,6 +263,18 @@ export class MindRenderer {
       }
     }
     return null;
+  }
+
+  /**
+   * 拖放位置判定：目标节点上 1/4 = before 兄弟，下 1/4 = after 兄弟，中部 = child
+   */
+  private dropPositionAt(n: FlatNode, sy: number): 'child' | 'before' | 'after' {
+    const r = this.nodeScreenRect(n);
+    const rel = (sy - r.top) / r.height;
+    if (n.depth === 0) return 'child'; // 根只接受子节点
+    if (rel < 0.3) return 'before';
+    if (rel > 0.7) return 'after';
+    return 'child';
   }
 
   nodeScreenRect(n: FlatNode): { left: number; top: number; width: number; height: number } {
@@ -238,12 +325,7 @@ export class MindRenderer {
     c.addEventListener('contextmenu', this.onContextMenuEvt);
   }
 
-  // ---------- 交互状态 ----------
-  private dragMode: 'pan' | 'node' | null = null;
-  private panStart = { x: 0, y: 0, ox: 0, oy: 0 };
-  private dragNode: FlatNode | null = null;
-  private dragMoved = false;
-  private dropTargetId: string | null = null;
+  // ---------- 交互 ----------
 
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
@@ -270,10 +352,16 @@ export class MindRenderer {
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
     const hit = this.hitTest(sx, sy);
-    this.dragMode = hit ? 'node' : 'pan';
     this.panStart = { x: e.clientX, y: e.clientY, ox: this.vp.offsetX, oy: this.vp.offsetY };
-    this.dragNode = hit ? hit.node : null;
     this.dragMoved = false;
+    if (hit) {
+      this.dragMode = 'node';
+      this.dragNode = hit.node;
+    } else {
+      // 空白按下：延迟判定是平移还是框选（移动超过阈值 = marquee）
+      this.dragMode = 'marquee';
+      this.marquee = { x0: sx, y0: sy, x1: sx, y1: sy };
+    }
     this.canvas.setPointerCapture(e.pointerId);
   };
 
@@ -281,6 +369,22 @@ export class MindRenderer {
     const rect = this.canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
+    if (this.dragMode === 'marquee') {
+      const dx = e.clientX - this.panStart.x;
+      const dy = e.clientY - this.panStart.y;
+      if (!this.dragMoved && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) this.dragMoved = true;
+      if (this.dragMoved && this.marquee) {
+        this.marquee.x1 = sx;
+        this.marquee.y1 = sy;
+        this.dirty = true;
+        this.requestFrame();
+      } else if (this.marquee) {
+        // 未超过阈值时跟随（点击无位移时 marquee 无效）
+        this.marquee.x1 = sx;
+        this.marquee.y1 = sy;
+      }
+      return;
+    }
     if (this.dragMode === 'pan') {
       this.setViewport({
         offsetX: this.panStart.ox + (e.clientX - this.panStart.x),
@@ -298,7 +402,10 @@ export class MindRenderer {
       if (this.dragMoved) {
         const under = this.hitTest(sx, sy)?.node ?? null;
         const candidate = under && under.id !== this.dragNode.id ? under : null;
-        const changed = candidate?.id !== this.dropTargetId;
+        if (candidate) {
+          this.dropPosition = this.dropPositionAt(candidate, sy);
+        }
+        const changed = candidate?.id !== this.dropTargetId || (candidate && this.dropPosition !== this.dropPosition);
         this.dropTargetId = candidate?.id ?? null;
         if (changed) {
           this.dirty = true;
@@ -321,12 +428,39 @@ export class MindRenderer {
     const rect = this.canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
-    if (this.dragMode === 'node' && this.dragNode) {
+    if (this.dragMode === 'marquee' && this.marquee) {
+      if (this.dragMoved) {
+        // 框选：收集与 marquee 相交的节点
+        const wx0 = (Math.min(this.marquee.x0, this.marquee.x1) - this.vp.offsetX) / this.vp.scale;
+        const wy0 = (Math.min(this.marquee.y0, this.marquee.y1) - this.vp.offsetY) / this.vp.scale;
+        const wx1 = (Math.max(this.marquee.x0, this.marquee.x1) - this.vp.offsetX) / this.vp.scale;
+        const wy1 = (Math.max(this.marquee.y0, this.marquee.y1) - this.vp.offsetY) / this.vp.scale;
+        const hits: string[] = [];
+        for (const n of this.nodes) {
+          if (n.x + n.w >= wx0 && n.x <= wx1 && n.y + n.h >= wy0 && n.y <= wy1) hits.push(n.id);
+        }
+        this.multiSelected = new Set(hits);
+        this.selectedId = hits.length === 1 ? hits[0]! : null;
+        this.opts.onMultiSelect?.(hits);
+        this.dirty = true;
+        this.requestFrame();
+      } else {
+        // 空白单击 = 取消选择
+        this.marquee = null;
+        this.selectedId = null;
+        this.multiSelected.clear();
+        this.opts.onSelect?.(null);
+        this.dirty = true;
+        this.requestFrame();
+      }
+      this.marquee = null;
+    } else if (this.dragMode === 'node' && this.dragNode) {
       if (this.dragMoved) {
         const targetId = this.dropTargetId;
+        const pos = this.dropPosition;
         this.dropTargetId = null;
         const target = targetId ? this.byId.get(targetId) ?? null : null;
-        this.opts.onDrop?.(this.dragNode, target);
+        this.opts.onDrop?.(this.dragNode, target, pos);
       } else {
         const hit = this.hitTest(sx, sy);
         if (hit?.zone === 'toggle') {
@@ -334,14 +468,15 @@ export class MindRenderer {
           this.opts.onToggleCollapse?.(hit.node);
         } else {
           this.selectedId = this.dragNode.id;
+          this.multiSelected = new Set([this.dragNode.id]);
           this.opts.onSelect?.(this.dragNode);
         }
       }
       this.dirty = true;
       this.requestFrame();
     } else if (this.dragMode === 'pan' && !this.dragMoved) {
-      // 空白单击 = 取消选择
       this.selectedId = null;
+      this.multiSelected.clear();
       this.opts.onSelect?.(null);
       this.dirty = true;
       this.requestFrame();
@@ -371,6 +506,34 @@ export class MindRenderer {
     }
   };
 
+  // ---------- 动画帧循环 ----------
+
+  private startAnimLoop(): void {
+    if (this.animating) return;
+    this.animating = true;
+    const tick = (): void => {
+      const now = performance.now();
+      let active = false;
+      for (const [id, a] of this.anim) {
+        if (now - a.start >= ANIM_MS) {
+          this.anim.delete(id);
+        } else {
+          active = true;
+        }
+      }
+      this.dirty = true;
+      this.draw();
+      if (active) {
+        requestAnimationFrame(tick);
+      } else {
+        this.animating = false;
+      }
+    };
+    requestAnimationFrame(tick);
+  }
+
+  // ---------- 绘制 ----------
+
   private requestFrame(): void {
     if (this.rafId || !this.dirty) return;
     this.rafId = requestAnimationFrame(() => {
@@ -380,6 +543,22 @@ export class MindRenderer {
         this.draw();
       }
     });
+  }
+
+  /** 计算节点当前动画位置（无动画则返回目标位置） */
+  private animRect(n: FlatNode): { x: number; y: number; w: number; h: number; alpha: number } {
+    const a = this.anim.get(n.id);
+    if (!a) return { x: n.x, y: n.y, w: n.w, h: n.h, alpha: 1 };
+    const t = Math.min(1, (performance.now() - a.start) / ANIM_MS);
+    // easeOutCubic
+    const e = 1 - Math.pow(1 - t, 3);
+    return {
+      x: a.from.x + (n.x - a.from.x) * e,
+      y: a.from.y + (n.y - a.from.y) * e,
+      w: a.from.w + (n.w - a.from.w) * e,
+      h: a.from.h + (n.h - a.from.h) * e,
+      alpha: (a.from.alpha ?? 1) + (1 - (a.from.alpha ?? 1)) * e,
+    };
   }
 
   private draw(): void {
@@ -392,8 +571,12 @@ export class MindRenderer {
     const rect = visibleWorldRect(this.vp, this.cssW, this.cssH);
     const visible: FlatNode[] = [];
     for (const n of this.nodes) {
-      if (n.x + n.w < rect.x0 || n.x > rect.x1 || n.y + n.h < rect.y0 || n.y > rect.y1) continue;
-      visible.push(n);
+      // 动画期间放宽裁剪（节点可能从视口外滑入）
+      if (this.anim.size > 0 || !(
+        n.x + n.w < rect.x0 || n.x > rect.x1 || n.y + n.h < rect.y0 || n.y > rect.y1
+      )) {
+        visible.push(n);
+      }
     }
 
     for (const n of visible) {
@@ -402,10 +585,27 @@ export class MindRenderer {
       if (p) this.drawLink(p, n);
     }
     for (const n of visible) this.drawNode(n);
+
+    // marquee
+    if (this.marquee && this.dragMoved) {
+      const m = this.marquee;
+      const x = Math.min(m.x0, m.x1);
+      const y = Math.min(m.y0, m.y1);
+      const w = Math.abs(m.x1 - m.x0);
+      const h = Math.abs(m.y1 - m.y0);
+      ctx.fillStyle = this.theme.marqueeFill;
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = this.theme.marqueeStroke;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, y, w, h);
+    }
   }
 
   private branchColor(n: FlatNode): string {
     if (n.depth === 0) return this.theme.rootFill;
+    // 样式面板覆盖色优先
+    const override = (n.props as { color?: string }).color;
+    if (override) return override;
     const pal = this.theme.branchPalette;
     return pal[(n.branch ?? 0) % pal.length]!;
   }
@@ -435,15 +635,20 @@ export class MindRenderer {
   private drawNode(n: FlatNode): void {
     const ctx = this.ctx;
     const s = this.vp.scale;
-    const p0 = worldToScreen(this.vp, n.x, n.y);
-    const w = n.w * s;
-    const h = n.h * s;
+    const r = this.animRect(n);
+    const p0 = worldToScreen(this.vp, r.x, r.y);
+    const w = r.w * s;
+    const h = r.h * s;
     const isRoot = n.depth === 0;
     const isSel = n.id === this.selectedId;
+    const isMulti = this.multiSelected.has(n.id);
     const isHov = n.id === this.hoveredId;
     const isDrop = this.dropTargetId === n.id;
     const color = this.branchColor(n);
     const radius = isRoot ? 10 : n.depth === 1 ? 8 : 6;
+
+    ctx.save();
+    ctx.globalAlpha = r.alpha;
 
     // 框
     ctx.beginPath();
@@ -455,7 +660,6 @@ export class MindRenderer {
       ctx.fillStyle = this.theme.leafFill;
       ctx.fill();
       if (n.depth === 1) {
-        // 左侧分支色条（左枝画在右缘）
         ctx.save();
         ctx.clip();
         ctx.fillStyle = color;
@@ -463,12 +667,12 @@ export class MindRenderer {
         else ctx.fillRect(p0.x, p0.y, 5 * s, h);
         ctx.restore();
       }
-      ctx.strokeStyle = isSel
+      ctx.strokeStyle = isSel || isMulti
         ? this.theme.selectionColor
         : n.depth === 1
           ? withAlpha(color, 0.35)
           : this.theme.leafStroke;
-      ctx.lineWidth = isSel ? 2 : 1;
+      ctx.lineWidth = isSel || isMulti ? 2 : 1;
       ctx.stroke();
     }
 
@@ -488,14 +692,13 @@ export class MindRenderer {
     const firstY = p0.y + (h - n.lines!.length * lineH) / 2 + lineH / 2;
     n.lines!.forEach((line, i) => {
       if (n.side === 'left') {
-        const lw = ctx.measureText(line).width;
         ctx.fillText(line, p0.x + w - 8 * s - textWOf(line, fs), firstY + i * lineH);
       } else {
         ctx.fillText(line, p0.x + 8 * s, firstY + i * lineH);
       }
     });
 
-    // 优先级徽标（框内远端）
+    // 优先级徽标
     const pr = (n.props as { priority?: string }).priority;
     if (pr && n.depth > 0) {
       const bw = 24 * s;
@@ -511,14 +714,14 @@ export class MindRenderer {
       ctx.textAlign = 'left';
     }
 
-    // 批注角标（框外近上角）
+    // 批注角标
     const ann = this.openAnnCounts.get(n.id) ?? 0;
     if (ann > 0) {
-      const r = 8 * s;
-      const cx = n.side === 'left' ? p0.x - r + 2 : p0.x + w - r - 2;
+      const rr = 8 * s;
+      const cx = n.side === 'left' ? p0.x - rr + 2 : p0.x + w - rr - 2;
       const cy = p0.y + 2;
       ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.arc(cx, cy, rr, 0, Math.PI * 2);
       ctx.fillStyle = this.theme.annBadgeFill;
       ctx.fill();
       ctx.fillStyle = '#fff';
@@ -528,14 +731,13 @@ export class MindRenderer {
       ctx.textAlign = 'left';
     }
 
-    // 折叠指示（XMind 风格：白底圆点 + 内色点 + 侧边数字）
+    // 折叠指示
     if (n.childCount > 0 && !this.hasVisibleChildren(n)) {
       const label = String(n.childCount);
       ctx.font = `500 ${Math.max(8, 11 * s)}px -apple-system, sans-serif`;
       const labelW = ctx.measureText(label).width;
       const cx = n.side === 'left' ? p0.x - 15 * s : p0.x + w + 15 * s;
       const cy = p0.y + h / 2;
-      // 圆底（白色，带分支色描边）
       ctx.beginPath();
       ctx.arc(cx, cy, 11 * s, 0, Math.PI * 2);
       ctx.fillStyle = '#ffffff';
@@ -543,23 +745,46 @@ export class MindRenderer {
       ctx.strokeStyle = withAlpha(color, 0.55);
       ctx.lineWidth = 1.5;
       ctx.stroke();
-      // 内色点
       ctx.beginPath();
       ctx.arc(cx, cy, 3.5 * s, 0, Math.PI * 2);
       ctx.fillStyle = color;
       ctx.fill();
-      // 数量标签
       ctx.fillStyle = '#64748b';
       ctx.fillText(label, n.side === 'left' ? cx - 15 * s - labelW : cx + 15 * s, p0.y + h / 2);
     }
 
+    // 拖放指示
     if (isDrop) {
-      ctx.strokeStyle = this.theme.selectionColor;
-      ctx.lineWidth = 2.5;
-      ctx.setLineDash([5, 4]);
-      ctx.strokeRect(p0.x - 3, p0.y - 3, w + 6, h + 6);
-      ctx.setLineDash([]);
+      if (this.dropPosition === 'child') {
+        ctx.strokeStyle = this.theme.selectionColor;
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([5, 4]);
+        ctx.strokeRect(p0.x - 3, p0.y - 3, w + 6, h + 6);
+        ctx.setLineDash([]);
+      } else {
+        // 插入线（before: 顶缘；after: 底缘）
+        const iy = this.dropPosition === 'before' ? p0.y - 2 : p0.y + h + 2;
+        ctx.strokeStyle = this.theme.insertLine;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(p0.x - 6, iy);
+        ctx.lineTo(p0.x + w + 6, iy);
+        ctx.stroke();
+        // 两端小三角
+        ctx.fillStyle = this.theme.insertLine;
+        ctx.beginPath();
+        ctx.moveTo(p0.x - 6, iy);
+        ctx.lineTo(p0.x - 1, iy - 4);
+        ctx.lineTo(p0.x - 1, iy + 4);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(p0.x + w + 6, iy);
+        ctx.lineTo(p0.x + w + 1, iy - 4);
+        ctx.lineTo(p0.x + w + 1, iy + 4);
+        ctx.fill();
+      }
     }
+    ctx.restore();
   }
 
   private hasVisibleChildren(n: FlatNode): boolean {
@@ -568,8 +793,8 @@ export class MindRenderer {
 }
 
 function textWOf(s: string, fs: number): number {
-  // 与布局近似字宽一致的右对齐测量
   let w = 0;
   for (const ch of s) w += (ch.charCodeAt(0) > 0x2e7f ? 15 : 8) * (fs / 14);
   return w;
 }
+
