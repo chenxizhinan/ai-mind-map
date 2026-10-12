@@ -31,6 +31,9 @@ function passVisualStyle<T extends Record<string, unknown>>(p: Record<string, un
   else delete outRec.color;
   if (typeof p.icon === 'string' && p.icon) outRec.icon = p.icon;
   else delete outRec.icon;
+  // 测试维度标注（模板一级节点）：AI 生成用例时读取此约束
+  if (typeof p.method === 'string' && p.method) outRec.method = p.method;
+  else delete outRec.method;
   return out;
 }
 

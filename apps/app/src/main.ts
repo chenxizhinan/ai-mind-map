@@ -27,7 +27,11 @@ function applyTheme(name: string): void {
   if (t) renderer.setTheme(t.theme);
   localStorage.setItem(THEME_KEY, name);
 }
-import type { MindDocument } from '@ai-mind-map/core';
+import {
+  BUILTIN_TEMPLATES,
+  buildTemplateDoc,
+  type MindDocument,
+} from '@ai-mind-map/core';
 
 const registry = new NodeTypeRegistry();
 registerBuiltinTypes(registry);
@@ -1634,9 +1638,10 @@ function openDoc(id: string): void {
 }
 
 /** 新建文档并打开 */
-function createDoc(title?: string): string {
+function createDoc(title?: string, templateId = 'blank'): string {
   const id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const d = blankDoc(title ?? '未命名导图');
+  const t = title ?? '未命名导图';
+  const d = templateId === 'blank' ? blankDoc(t) : buildTemplateDoc(templateId, t);
   localStorage.setItem(DOC_PREFIX + id, JSON.stringify(d));
   const entries = loadDocsIndex();
   entries.unshift({ id, title: d.meta.title, updatedAt: Date.now() });
@@ -1845,11 +1850,71 @@ document.getElementById('vm-list')?.addEventListener('click', () => setHomeViewM
 document.getElementById('vm-card')?.addEventListener('click', () => setHomeViewMode('card'));
 
 // 首页按钮
+// 新建导图：弹出模板选择对话框
 document.getElementById('home-new')?.addEventListener('click', () => {
-  const title = prompt('新导图名称', '未命名导图');
-  if (title === null) return;
-  createDoc(title.trim() || undefined);
+  openTemplateDialog();
 });
+
+/** 模板选择对话框：名称 + 模板卡片，确认后创建 */
+function openTemplateDialog(): void {
+  const tpl = BUILTIN_TEMPLATES;
+  const overlay = document.createElement('div');
+  overlay.style.cssText =
+    'position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:1500;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:26px 28px;width:620px;max-width:92vw;box-shadow:0 24px 80px rgba(15,23,42,0.3)">
+      <div style="font-size:17px;font-weight:700;color:#1e293b;margin-bottom:4px">新建导图</div>
+      <div style="font-size:12.5px;color:#94a3b8;margin-bottom:18px">选择一个模板开始；根节点名称将默认使用导图名称</div>
+      <div style="margin-bottom:18px">
+        <input id="tpl-name" placeholder="导图名称" style="width:100%;font-size:14px;padding:9px 12px;border:1px solid #cbd5e1;border-radius:9px;outline:none;box-sizing:border-box" />
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin-bottom:20px">
+        ${tpl
+          .map(
+            (t, i) => `
+          <div class="tpl-card" data-id="${t.id}" style="border:1.5px solid ${i === 0 ? '#2563eb' : '#e2e8f0'};border-radius:12px;padding:14px;cursor:pointer;transition:border-color 0.14s ease,background 0.14s ease;${i === 0 ? 'background:#f5f8ff;' : ''}">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <span style="font-size:14px;font-weight:600;color:#1e293b">${t.name}</span>
+              ${t.tags.map((tag) => `<span style="font-size:10px;color:#2563eb;background:#eff6ff;border-radius:999px;padding:1px 8px">${tag}</span>`).join('')}
+            </div>
+            <div style="font-size:12px;color:#64748b;line-height:1.5">${t.description}</div>
+          </div>`,
+          )
+          .join('')}
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px">
+        <button class="btn" id="tpl-cancel" style="padding:8px 18px">取消</button>
+        <button class="btn primary" id="tpl-ok" style="padding:8px 18px">创建</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  let selected = tpl[0]!.id;
+  const nameInput = overlay.querySelector('#tpl-name') as HTMLInputElement;
+  (overlay.querySelector('.tpl-card') as HTMLElement).style.borderColor = '#2563eb';
+  overlay.querySelectorAll('.tpl-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      selected = (card as HTMLElement).dataset.id!;
+      overlay.querySelectorAll('.tpl-card').forEach((c) => {
+        (c as HTMLElement).style.borderColor = '#e2e8f0';
+        (c as HTMLElement).style.background = '#fff';
+      });
+      (card as HTMLElement).style.borderColor = '#2563eb';
+      (card as HTMLElement).style.background = '#f5f8ff';
+    });
+  });
+  const close = (): void => overlay.remove();
+  overlay.querySelector('#tpl-cancel')?.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+  overlay.querySelector('#tpl-ok')?.addEventListener('click', () => {
+    const title = nameInput.value.trim() || '未命名导图';
+    close();
+    createDoc(title, selected);
+  });
+  nameInput.focus();
+}
 document.getElementById('home-import')?.addEventListener('click', () => {
   // 复用导入 JSON 通道：导入后存为新文档
   const input = document.createElement('input');

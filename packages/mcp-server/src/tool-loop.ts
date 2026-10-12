@@ -35,6 +35,10 @@ const SYSTEM_PROMPT = [
   '4. 修改完成后用 1-3 句话总结，不要输出大段 JSON。',
   '5. 按功能模块组织 folder，叶子用 case，props 带优先级 P0-P3，覆盖正常流/边界/异常。',
   '6. 用中文回复。',
+  '',
+  '如果导图按测试维度组织（一级节点 props.method 标注了测试方向），生成用例时：',
+  '- 先 query_tree 读取各维度分支（props.method），严格按对应维度的设计方法展开用例',
+  '- 每条用例挂在它检验的维度分支下；约束细节见下方维度说明',
 ].join('\n');
 
 interface ToolDef {

@@ -19,6 +19,7 @@ import { readFileSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DocStore, type NodeTypeRegistry } from '@ai-mind-map/core';
 import { collectToolExecutors, runToolLoop, type ToolExecutor } from './tool-loop.js';
+import { renderMethodPrompt } from '@ai-mind-map/core';
 
 export interface BridgeOptions {
   /** 权威 DocStore 惰性引用 */
@@ -146,8 +147,14 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
           try {
             // AI 循环中文件可能被外部改：不重载（权威副本在内存，落盘会覆盖外部改动）。
             // 循环结束后统一重载一次，外部改动会被 AI 落盘覆盖——单写者模型下可接受。
+            // 从当前文档的一级节点读测试维度标注 → 生成方法约束注入 system
+            const dims = opts
+              .store()
+              .root.children.map((c) => String((c.props as { method?: string }).method ?? ''))
+              .filter(Boolean);
             const result = await runToolLoop(executors, message, {
               model: opts.model,
+              systemExtra: renderMethodPrompt(dims),
               onText: (t) => {
                 res.write(`event: text\ndata: ${JSON.stringify(t)}\n\n`);
               },
