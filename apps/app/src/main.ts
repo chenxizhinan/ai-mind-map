@@ -58,6 +58,8 @@ function blankDoc(title = '新导图'): MindDocument {
   const s = new DocStore(registry, {
     meta: { title, updatedAt: new Date().toISOString() },
   });
+  // 根节点名称默认取文档名（一次性快照：此后各自独立编辑，互不联动）
+  s.updateNode(s.root.id, { text: title });
   return s.toJSON();
 }
 

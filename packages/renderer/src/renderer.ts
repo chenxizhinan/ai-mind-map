@@ -380,6 +380,7 @@ export class MindRenderer {
     c.removeEventListener('pointerup', this.onPointerUp);
     c.removeEventListener('pointerleave', this.onPointerLeave);
     c.removeEventListener('contextmenu', this.onContextMenuEvt);
+    c.removeEventListener('dblclick', this.onDblClick);
     cancelAnimationFrame(this.rafId);
   }
 
@@ -412,7 +413,18 @@ export class MindRenderer {
     c.addEventListener('pointerup', this.onPointerUp);
     c.addEventListener('pointerleave', this.onPointerLeave);
     c.addEventListener('contextmenu', this.onContextMenuEvt);
+    c.addEventListener('dblclick', this.onDblClick);
   }
+
+  /** 双击节点：进入文本编辑（onActivate） */
+  private onDblClick = (e: MouseEvent): void => {
+    const rect = this.canvas.getBoundingClientRect();
+    const hit = this.hitTest(e.clientX - rect.left, e.clientY - rect.top);
+    if (hit) {
+      e.preventDefault();
+      this.opts.onActivate?.(hit.node);
+    }
+  };
 
   // ---------- 交互 ----------
 
