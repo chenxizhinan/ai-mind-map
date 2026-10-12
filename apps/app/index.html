@@ -25,7 +25,7 @@
         border-bottom: 1px solid #f1f5f9;
       }
       .bar-main {
-        display: flex; align-items: center; gap: 8px;
+        display: flex; align-items: center; gap: 6px;
         padding: 8px 16px;
         overflow-x: auto;
         background: #f8fafc;            /* 与白色首行区分：工具行浅灰底 */
@@ -54,6 +54,9 @@
         border: 1px solid #cbd5e1; border-radius: 6px; background: #fff;
         cursor: pointer; white-space: nowrap;
       }
+      .tb-group { display: inline-flex; gap: 4px; }
+      .tb-sep { width: 1px; height: 20px; background: #e2e8f0; margin: 0 6px; flex-shrink: 0; align-self: center; }
+      .tb-icon { width: 30px; text-align: center; padding: 5px 0 !important; font-size: 14px !important; }
       header button.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
 
       main { flex: 1; display: flex; min-height: 0; }
@@ -161,10 +164,11 @@
       .reply-box textarea { width: 100%; min-height: 36px; margin-top: 8px; }
 
       footer.hint {
-        padding: 6px 14px; border-top: 1px solid #e2e8f0;
+        padding: 6px 16px; border-top: 1px solid #e2e8f0;
         font-size: 11px; color: #94a3b8; background: #fff;
-        display: flex; gap: 14px; flex-wrap: wrap;
+        display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
       }
+      footer.hint b { font-weight: 600; color: #64748b; }
     </style>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='2' y='9.5' width='6' height='5' rx='1' fill='%231e293b'/%3E%3Crect x='16' y='3' width='6' height='4.6' rx='1' fill='%232563eb'/%3E%3Crect x='16' y='10.2' width='6' height='4.6' rx='1' fill='%230891b2'/%3E%3Crect x='16' y='17.4' width='4.6' height='4.6' rx='1' fill='%2316a34a'/%3E%3C/svg%3E" />
   </head>
@@ -191,30 +195,43 @@
             </svg>
           </div>
         </div>
-        <!-- 第二行：文件名 + 统计 + 操作区 -->
+        <!-- 第二行：文件名 + 统计 + 分组操作区 -->
         <div class="bar-main">
           <span id="doc-title" contenteditable="plaintext-only" spellcheck="false" title="点击重命名导图">未命名导图</span>
-          <span class="stats" id="stats"></span>
+          <span class="stats" id="stats" title="点击查看用例统计"></span>
           <span class="spacer"></span>
-          <button id="btn-undo" title="撤销 (⌘Z)">↩ 撤销</button>
-          <button id="btn-redo" title="重做 (⌘⇧Z)">↪ 重做</button>
-          <select id="theme-select" title="主题风格">
-            <option value="default">默认蓝</option>
-            <option value="gold">黑金</option>
-            <option value="forest">森绿</option>
-          </select>
-          <button id="view-toggle">大纲视图</button>
-          <select id="layout-select" title="布局方向">
-            <option value="both">地图（左右）</option>
-            <option value="right">逻辑图（向右）</option>
-            <option value="down">组织结构（向下）</option>
-            <option value="up">向上树</option>
-          </select>
-          <button id="io-toggle">导入 / 导出</button>
-          <button id="ai-toggle" class="primary" style="background:#7c3aed;border-color:#7c3aed">✦ AI 助手</button>
-          <button id="btn-expand-all">全部展开</button>
-          <button id="btn-collapse-all">全部折叠</button>
-          <button id="btn-add-case" class="primary">+ 用例</button>
+          <!-- 编辑组 -->
+          <span class="tb-group">
+            <button id="btn-undo" title="撤销 (⌘Z)" class="tb-icon">↩</button>
+            <button id="btn-redo" title="重做 (⌘⇧Z)" class="tb-icon">↪</button>
+          </span>
+          <span class="tb-sep"></span>
+          <!-- 视图组 -->
+          <span class="tb-group">
+            <button id="view-toggle" title="切换画布/大纲视图">大纲</button>
+            <select id="layout-select" title="布局方向">
+              <option value="both">地图</option>
+              <option value="right">逻辑图</option>
+              <option value="down">组织结构</option>
+              <option value="up">向上树</option>
+            </select>
+            <select id="theme-select" title="主题风格">
+              <option value="default">默认蓝</option>
+              <option value="gold">黑金</option>
+              <option value="forest">森绿</option>
+            </select>
+          </span>
+          <span class="tb-sep"></span>
+          <!-- 内容组 -->
+          <span class="tb-group">
+            <button id="btn-expand-all" title="全部展开" class="tb-icon" style="font-size:13px">⇱</button>
+            <button id="btn-collapse-all" title="全部折叠" class="tb-icon" style="font-size:13px">⇲</button>
+            <button id="io-toggle" title="导入/导出 XMind · Markdown · PNG · JSON" style="padding:5px 8px">导入⇪</button>
+          </span>
+          <span class="tb-sep"></span>
+          <!-- 主行动 -->
+          <button id="ai-toggle" class="primary" title="AI 对话式生成用例" style="background:#7c3aed;border-color:#7c3aed">✦ AI 助手</button>
+          <button id="btn-add-case" class="primary" title="新建用例 (Tab)">+ 用例</button>
         </div>
       </header>
       <div id="home-view" style="display:none;position:absolute;inset:0;z-index:500;overflow-y:auto;background:#f6f8fb">
@@ -306,17 +323,15 @@
         </aside>
       </main>
       <footer class="hint">
-        <span>Tab/Insert：新建子节点（自动进入编辑）</span>
-        <span>⇧Tab：提升一级</span>
-        <span>Enter：新建同级节点</span>
-        <span>⌘Z / ⌘⇧Z：撤销/重做</span>
-        <span>Space：折叠/展开</span>
-        <span>→ 展开/进入，← 返回父级</span>
-        <span>↑↓ 兄弟导航</span>
-        <span>⌥↑/↓ 同级移动 · ⌘⌥←/→ 置顶/置底</span>
-        <span>F2：编辑文本</span>
-        <span>Del：删除</span>
-        <span>⌘C/⌘V：复制/粘贴子树</span>
+        <span><b>Tab</b> 子节点</span>
+        <span><b>Enter</b> 同级</span>
+        <span><b>双击</b> 编辑</span>
+        <span><b>Space</b> 折叠</span>
+        <span><b>方向键</b> 导航</span>
+        <span><b>⌥↑↓</b> 排序</span>
+        <span><b>⌘F</b> 搜索</span>
+        <span><b>⌘Z</b> 撤销</span>
+        <span style="color:#cbd5e1">右键节点看全部操作 · 大纲视图支持 Markdown 快捷输入</span>
       </footer>
       <div id="batch-bar" style="display:none;position:fixed;top:48px;left:50%;transform:translateX(-50%);z-index:90;align-items:center;gap:8px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:6px 10px;box-shadow:0 8px 30px rgba(15,23,42,0.16)">
         <span id="batch-count" style="font-size:12px;color:#475569;white-space:nowrap"></span>
