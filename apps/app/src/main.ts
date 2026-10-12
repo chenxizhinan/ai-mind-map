@@ -1306,7 +1306,7 @@ function renderOutline(): void {
 
 function toggleOutline(): void {
   outlineMode = !outlineMode;
-  viewToggleBtn.textContent = outlineMode ? '画布视图' : '大纲视图';
+  viewToggleBtn.textContent = outlineMode ? '画布' : '大纲';
   outlinePane.style.display = outlineMode ? 'block' : 'none';
   if (outlineMode) renderOutline();
 }
