@@ -1427,9 +1427,30 @@ function loadDoc(d: MindDocument, keepViewport = false): void {
   doc = store.toJSON();
   expandedIds = null;
   selected = null;
+  syncDocTitle();
   renderPanel();
   relayout();
   if (!keepViewport) renderer.focusNode(store.root.id);
+}
+
+/** 顶栏文件名显示 = 文档标题 */
+function syncDocTitle(): void {
+  const el = document.getElementById('doc-title');
+  if (el) el.textContent = store.document.meta.title || '未命名导图';
+}
+
+/** 文件名编辑提交：改名同步到文档 meta 与多文档索引 */
+function commitDocTitle(): void {
+  const el = document.getElementById('doc-title');
+  if (!el) return;
+  const next = (el.textContent ?? '').trim();
+  syncDocTitle(); // 先复位显示（空/未变时回滚）
+  if (!next || next === store.document.meta.title) return;
+  store.document.meta.title = next;
+  syncDocTitle(); // 显示新标题
+  if (currentDocId) touchDocEntry(currentDocId, next);
+  saveLocal();
+  toast('已重命名', 'success');
 }
 
 // 编辑器失焦提交
@@ -1444,6 +1465,27 @@ editorEl().addEventListener('keydown', (e) => {
   }
 });
 // 手动 commitEdit 绑定后 reattach：blur 触发在 display:none 之前调用
+
+// 顶栏文件名编辑（contenteditable）：Enter 提交、Esc 回滚、失焦提交
+const docTitleEl = document.getElementById('doc-title') as HTMLSpanElement;
+docTitleEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    docTitleEl.blur(); // 触发失焦提交
+  } else if (e.key === 'Escape') {
+    syncDocTitle();
+    docTitleEl.blur();
+  }
+});
+docTitleEl.addEventListener('focus', () => {
+  // 聚焦时全选便于整体替换
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(docTitleEl);
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+});
+docTitleEl.addEventListener('blur', commitDocTitle);
 
 // 防抖期间关闭页面时立即落盘
 window.addEventListener('beforeunload', () => {
