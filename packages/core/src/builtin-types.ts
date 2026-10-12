@@ -52,6 +52,9 @@ function passVisualStyle<T extends Record<string, unknown>>(p: Record<string, un
   // 测试维度标注（模板一级节点）：AI 生成用例时读取此约束
   if (typeof p.method === 'string' && p.method) outRec.method = p.method;
   else delete outRec.method;
+  // 执行标记（case）：pass/fail/blocked
+  if (typeof p.exec === 'string' && p.exec) outRec.exec = p.exec;
+  else delete outRec.exec;
   return out;
 }
 

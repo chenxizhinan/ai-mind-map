@@ -901,6 +901,29 @@ export class MindRenderer {
       ctx.textAlign = 'left';
     }
 
+    // 执行标记（case 节点左上角小圆：通过绿/失败红/阻塞橙）
+    const exec = (n.props as { exec?: string }).exec;
+    if (exec) {
+      const execColors: Record<string, string> = { pass: '#16a34a', fail: '#dc2626', blocked: '#ea580c' };
+      const execMarks: Record<string, string> = { pass: '✓', fail: '✗', blocked: '⏸' };
+      const ec = execColors[exec]!;
+      const cx = n.side === 'left' ? p0.x + w - 8 * s : p0.x + 8 * s;
+      const cy = p0.y + 6 * s;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6.5 * s, 0, Math.PI * 2);
+      ctx.fillStyle = ec;
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.2 * s;
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = `700 ${Math.max(8, 9 * s)}px -apple-system, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(execMarks[exec]!, cx, cy + 0.5);
+      ctx.textAlign = 'left';
+    }
+
     // 批注角标
     const ann = this.openAnnCounts.get(n.id) ?? 0;
     if (ann > 0) {

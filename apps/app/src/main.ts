@@ -292,6 +292,21 @@ function moveNode(id: string, targetId: string | null): void {
   renderer.focusNode(id);
 }
 
+/** 设置/清除用例执行标记（pass/fail/blocked；undefined=清除） */
+function setNodeExec(id: string, exec: 'pass' | 'fail' | 'blocked' | undefined): void {
+  const node = store.getNode(id);
+  if (!node) return;
+  snapshot();
+  store.updateNode(id, { props: { exec: exec ?? undefined } });
+  relayout();
+  renderOutlineIfVisible();
+}
+
+/** 大纲可见时刷新（保持滚动位置由 syncOutlineToSelection 处理） */
+function renderOutlineIfVisible(): void {
+  if (outlineMode) renderOutline();
+}
+
 // ---------- 兄弟排序（顺序固化在文档 children 顺序里） ----------
 
 /**
@@ -650,7 +665,15 @@ function showCtxMenu(node: FlatNode, screen: { x: number; y: number }): void {
     { label: '新建同级节点', kbd: 'Enter', action: () => addSibling(node.id), },
     { label: '编辑文本', kbd: 'F2', action: () => startEdit(node.id) },
     { label: '设置节点样式…', action: () => showStylePanel(node.id) },
-    { label: '展开/折叠', kbd: 'Space', action: () => toggleCollapse(node.id), divider: true },
+    ...(leaf
+      ? [
+          { label: '✓ 标记通过', action: () => setNodeExec(node.id, 'pass') },
+          { label: '✗ 标记失败', action: () => setNodeExec(node.id, 'fail') },
+          { label: '⏸ 标记阻塞', action: () => setNodeExec(node.id, 'blocked') },
+          { label: '清除执行标记', action: () => setNodeExec(node.id, undefined), divider: true },
+        ]
+      : []),
+    { label: '展开/折叠', kbd: 'Space', action: () => toggleCollapse(node.id), divider: !leaf },
     { label: '复制子树', kbd: '⌘C', action: () => { clipboard = JSON.stringify(store.getNode(node.id)); } },
     {
       label: '粘贴子树',
@@ -953,6 +976,7 @@ function renderPanel(): void {
   const body = document.getElementById('panel-body')!;
   if (panelTab === 'info') renderInfoForm(body, node);
   else renderAnnotations(body, node);
+  syncOutlineToSelection();
 }
 
 function renderInfoForm(body: HTMLElement, node: MindNode): void {
@@ -1106,6 +1130,97 @@ function renderAnnotations(body: HTMLElement, node: MindNode): void {
   );
 }
 
+// ---------- 统计面板（点击顶栏 stats 弹出） ----------
+let statsPopover: HTMLDivElement | null = null;
+
+function closeStatsPopover(): void {
+  statsPopover?.remove();
+  statsPopover = null;
+}
+
+function openStatsPopover(): void {
+  if (statsPopover) {
+    closeStatsPopover();
+    return;
+  }
+  const cases: MindNode[] = [];
+  const walk = (n: MindNode): void => {
+    if (n.type === 'case') cases.push(n);
+    for (const c of n.children ?? []) walk(c);
+  };
+  walk(store.root);
+
+  const countBy = (get: (n: MindNode) => string): string => {
+    const m = new Map<string, number>();
+    for (const c of cases) {
+      const k = get(c) || '未设置';
+      m.set(k, (m.get(k) ?? 0) + 1);
+    }
+    return [...m.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `<span style="display:inline-flex;align-items:center;gap:4px;margin:2px 8px 2px 0"><b style="color:#1e293b">${v}</b><span style="color:#64748b">${escapeHtml(k)}</span></span>`)
+      .join('') || '<span style="color:#cbd5e1">—</span>';
+  };
+
+  const total = countNodes(store.root) - 1;
+  const exec = cases.filter((c) => (c.props as { exec?: string }).exec);
+  const passed = cases.filter((c) => (c.props as { exec?: string }).exec === 'pass').length;
+  const failed = cases.filter((c) => (c.props as { exec?: string }).exec === 'fail').length;
+  const blocked = cases.filter((c) => (c.props as { exec?: string }).exec === 'blocked').length;
+
+  const popover = document.createElement('div');
+  popover.style.cssText =
+    'position:fixed;top:74px;left:16px;z-index:900;width:380px;max-width:92vw;background:#fff;border:1px solid #e2e8f0;border-radius:14px;box-shadow:0 16px 60px rgba(15,23,42,0.18);padding:18px 20px;font-size:12.5px';
+  popover.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <b style="font-size:14px;color:#1e293b">用例统计</b>
+      <button id="stats-close" style="border:none;background:transparent;cursor:pointer;color:#94a3b8;font-size:14px">✕</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <div style="flex:1;background:#f8fafc;border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:20px;font-weight:700;color:#1e293b">${cases.length.toLocaleString()}</div>
+        <div style="font-size:11px;color:#94a3b8">用例总数</div>
+      </div>
+      <div style="flex:1;background:#f8fafc;border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:20px;font-weight:700;color:#16a34a">${passed}</div>
+        <div style="font-size:11px;color:#94a3b8">通过</div>
+      </div>
+      <div style="flex:1;background:#f8fafc;border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:20px;font-weight:700;color:#dc2626">${failed}</div>
+        <div style="font-size:11px;color:#94a3b8">失败</div>
+      </div>
+      <div style="flex:1;background:#f8fafc;border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:20px;font-weight:700;color:#ea580c">${blocked}</div>
+        <div style="font-size:11px;color:#94a3b8">阻塞</div>
+      </div>
+    </div>
+    ${exec.length ? `<div style="margin-bottom:10px;font-size:11.5px;color:#64748b">执行进度：${exec.length} / ${cases.length}（${Math.round((exec.length / Math.max(1, cases.length)) * 100)}%）</div>` : ''}
+    <div style="margin-bottom:8px"><span style="color:#94a3b8">按优先级</span></div>
+    <div style="margin-bottom:12px">${countBy((n) => String((n.props as { priority?: string }).priority ?? ''))}</div>
+    <div style="margin-bottom:8px"><span style="color:#94a3b8">按用例类型</span></div>
+    <div style="margin-bottom:12px">${countBy((n) => String((n.props as { caseType?: string }).caseType ?? ''))}</div>
+    <div style="margin-bottom:8px"><span style="color:#94a3b8">按所属维度（一级分支）</span></div>
+    <div>${countBy((n) => {
+      let cur = store.getParent(n.id);
+      while (cur && store.getParent(cur.id)) cur = store.getParent(cur.id)!;
+      return cur?.text ?? '';
+    })}</div>
+    <div style="margin-top:12px;font-size:11px;color:#cbd5e1">导图总节点 ${total.toLocaleString()}</div>
+  `;
+  document.body.appendChild(popover);
+  statsPopover = popover;
+  popover.querySelector('#stats-close')?.addEventListener('click', closeStatsPopover);
+}
+
+// 顶栏 stats 可点击
+document.getElementById('stats')?.addEventListener('click', openStatsPopover);
+// 点外部关闭
+window.addEventListener('pointerdown', (e) => {
+  if (statsPopover && !statsPopover.contains(e.target as Node) && (e.target as HTMLElement).id !== 'stats') {
+    closeStatsPopover();
+  }
+});
+
 function threadHtml(a: {
   id: string;
   createdBy: string;
@@ -1158,9 +1273,19 @@ function outlineHtml(): string {
           : `<span class="o-icon" title="${escapeHtml(typeLabelOf(n.type))}" style="font-size:12px;user-select:none;margin-left:2px">${icon}</span>`
       : '';
     const badge = priority && depth > 0 ? `<span class="o-badge" style="font-size:10px;background:#e2e8f0;border-radius:4px;padding:1px 5px;margin-left:6px;color:#475569">${escapeHtml(priority)}</span>` : '';
+    const exec = String((n.props as { exec?: string }).exec ?? '');
+    const EXEC_MARKS: Record<string, { mark: string; color: string; label: string }> = {
+      pass: { mark: '✓', color: '#16a34a', label: '通过' },
+      fail: { mark: '✗', color: '#dc2626', label: '失败' },
+      blocked: { mark: '⏸', color: '#ea580c', label: '阻塞' },
+    };
+    const execBadge = exec && EXEC_MARKS[exec] && n.type === 'case'
+      ? `<span class="o-exec" data-exec="${exec}" title="执行：${EXEC_MARKS[exec]!.label}" style="font-size:11px;font-weight:700;color:${EXEC_MARKS[exec]!.color};margin-left:6px;user-select:none">${EXEC_MARKS[exec]!.mark}</span>`
+      : '';
+    const selCls = selected?.id === n.id ? 'o-sel' : '';
     return `
-      <div class="o-row" data-node="${n.id}" style="margin-left:${depth * 22}px;display:flex;align-items:baseline;gap:2px;padding:3px 6px;border-radius:6px">
-        ${toggle}${iconSpan}${badge}
+      <div class="o-row ${selCls}" data-node="${n.id}" style="margin-left:${depth * 22}px;display:flex;align-items:baseline;gap:2px;padding:3px 6px;border-radius:6px;${selCls ? 'background:#eff6ff' : ''}">
+        ${toggle}${iconSpan}${badge}${execBadge}
         <span class="o-text" contenteditable="plaintext-only" data-otext="${n.id}" style="flex:1;outline:none;border-radius:4px;padding:2px 6px">${escapeHtml(n.text)}</span>
         <span style="font-size:10px;color:#cbd5e1;user-select:none">${kids.length ? `${kids.length}` : ''}</span</span>
       </div>
@@ -1188,6 +1313,27 @@ function toggleOutline(): void {
 
 viewToggleBtn.addEventListener('click', toggleOutline);
 
+/**
+ * Markdown 快捷前缀解析（幕布式）：
+ * '# '→提升为 folder（标题感），'- '或'· '→case 用例，'!'→P0，'!!'→P1…
+ * 返回 { type, priority, text }
+ */
+function parseOutlineShortcut(raw: string, parentIsDim: boolean): { type: string; priority?: string; text: string } {
+  let s = raw.trim();
+  let type = parentIsDim ? 'folder' : 'case';
+  let priority: string | undefined;
+  // 前缀标记
+  if (/^#\s/.test(s)) { type = 'folder'; s = s.replace(/^#\s/, ''); }
+  else if (/^[-·]\s/.test(s)) { type = 'case'; s = s.replace(/^[-·]\s/, ''); }
+  // 优先级标记（收尾 !! / !!! 等）
+  const bang = s.match(/(!{1,3})$/);
+  if (bang) {
+    priority = bang[1]!.length === 1 ? 'P0' : bang[1]!.length === 2 ? 'P1' : 'P2';
+    s = s.replace(/\s*!{1,3}$/, '');
+  }
+  return { type, priority, text: s };
+}
+
 // 大纲内编辑：失焦提交文本
 outlinePane.addEventListener('focusout', (e) => {
   const span = (e.target as HTMLElement).closest('[data-otext]') as HTMLElement | null;
@@ -1204,15 +1350,119 @@ outlinePane.addEventListener('focusout', (e) => {
   }
 });
 
-// 折叠切换
+// 折叠切换 + 点击行定位画布（大纲 → 画布同步）
 outlinePane.addEventListener('click', (e) => {
   const t = (e.target as HTMLElement).closest('[data-toggle]') as HTMLElement | null;
-  if (!t) return;
-  const id = t.dataset.toggle!;
-  if (outlineCollapsed.has(id)) outlineCollapsed.delete(id);
-  else outlineCollapsed.add(id);
-  renderOutline();
+  if (t) {
+    const id = t.dataset.toggle!;
+    if (outlineCollapsed.has(id)) outlineCollapsed.delete(id);
+    else outlineCollapsed.add(id);
+    renderOutline();
+    return;
+  }
+  const row = (e.target as HTMLElement).closest('.o-row') as HTMLElement | null;
+  if (row && !(e.target as HTMLElement).closest('[data-otext]')) {
+    const id = row.dataset.node!;
+    if (store.getNode(id)) {
+      selectId(id);
+      if (!outlineMode) renderer.focusNode(id);
+      else renderOutline(); // 高亮大纲当前行
+    }
+  }
 });
+
+// 大纲内结构键：Enter 建同级（MD 快捷前缀），Tab/⇧Tab 缩进/提升，空文本 Enter 删除
+outlinePane.addEventListener('keydown', (e) => {
+  const span = (e.target as HTMLElement).closest('[data-otext]') as HTMLElement | null;
+  if (!span) return;
+  const id = span.dataset.otext!;
+  const node = store.getNode(id);
+  if (!node) return;
+  const parent = store.getParent(id);
+
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    const raw = span.textContent?.trim() ?? '';
+    if (!raw) {
+      // 空行 Enter = 删除该节点（根除外）
+      if (id !== store.root.id) {
+        snapshot();
+        store.deleteSubtree(id);
+        renderOutline();
+        relayout();
+      }
+      return;
+    }
+    // 先提交当前文本（含 MD 前缀快捷：改类型/优先级/文本）
+    const parsed = parseOutlineShortcut(raw, String((node.props as { method?: string }).method ?? '') !== '');
+    if (parsed.text !== node.text || parsed.type !== node.type) {
+      snapshot();
+      try {
+        if (parsed.type !== node.type) store.setNodeType(id, parsed.type);
+        store.updateNode(id, { text: parsed.text, props: { ...(parsed.priority ? { priority: parsed.priority } : {}) } });
+      } catch { /* 回滚由 catch 外的渲染兜底 */ }
+      renderOutline();
+    }
+    // 新建同级节点（同样支持输入时用 MD 前缀）
+    if (!parent) return;
+    snapshot();
+    const idx = (parent.children ?? []).findIndex((c) => c.id === id);
+    const r = store.addSubtree(parent.id, { type: 'case', text: ' ' });
+    store.moveSubtree(r.nodeId, parent.id, idx + 1);
+    renderOutline();
+    relayout();
+    // 聚焦新行
+    requestAnimationFrame(() => {
+      const ns = outlinePane.querySelector(`[data-otext="${r.nodeId}"]`) as HTMLElement | null;
+      ns?.focus();
+    });
+  } else if (e.key === 'Tab') {
+    e.preventDefault();
+    const raw = span.textContent?.trim() ?? '';
+    if (raw) {
+      const parsed = parseOutlineShortcut(raw, false);
+      if (parsed.text !== node.text) {
+        snapshot();
+        store.updateNode(id, { text: parsed.text });
+      }
+    }
+    if (e.shiftKey) {
+      outdent(id);
+    } else {
+      // 缩进：变成前一个兄弟的子节点（幕布行为）
+      const siblings = parent?.children ?? [];
+      const idx = siblings.findIndex((c) => c.id === id);
+      if (idx > 0) {
+        const prev = siblings[idx - 1]!;
+        if (registry.get(prev.type).leafOnly) {
+          toast('上一节点是叶子，不能缩进到它下面', 'warn');
+          return;
+        }
+        snapshot();
+        store.moveSubtree(id, prev.id);
+        renderOutline();
+        relayout();
+      }
+    }
+    requestAnimationFrame(() => {
+      (outlinePane.querySelector(`[data-otext="${id}"]`) as HTMLElement | null)?.focus();
+    });
+  }
+});
+
+/** 画布选中变化 → 大纲滚动定位（画布 → 大纲同步） */
+function syncOutlineToSelection(): void {
+  if (!outlineMode || !selected) return;
+  const row = outlinePane.querySelector(`.o-row[data-node="${selected.id}"]`) as HTMLElement | null;
+  if (!row) return;
+  row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  outlinePane.querySelectorAll('.o-row.o-sel').forEach((el) => {
+    el.classList.remove('o-sel');
+    (el as HTMLElement).style.background = '';
+  });
+  row.classList.add('o-sel');
+  row.style.background = '#eff6ff';
+}
 
 // ---------- 导入/导出菜单 ----------
 function download(filename: string, data: BlobPart, type: string): void {
