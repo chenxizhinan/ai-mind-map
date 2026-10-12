@@ -46,25 +46,29 @@
         min-width: 140px; display: none;
       }
 
-      /* 右键菜单 */
-      #ctx-menu {
+      /* 右键菜单 & 导入导出菜单 */
+      #ctx-menu, #io-menu {
         position: fixed; z-index: 1000;
         background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
         box-shadow: 0 10px 40px rgba(15, 23, 42, 0.14);
         padding: 6px; min-width: 180px;
         display: none;
       }
-      #ctx-menu .item {
+      #ctx-menu .item, #io-menu .item {
         padding: 7px 12px; border-radius: 7px; cursor: pointer;
         display: flex; justify-content: space-between; gap: 18px;
         font-size: 13px;
       }
-      #ctx-menu .item:hover { background: #f1f5f9; }
-      #ctx-menu .item .kbd { color: #94a3b8; font-size: 11px; }
-      #ctx-menu .divider { height: 1px; background: #e2e8f0; margin: 5px 8px; }
-      #ctx-menu .item.disabled { color: #cbd5e1; cursor: default; }
-      #ctx-menu .item.danger { color: #dc2626; }
-      #ctx-menu .item.danger:hover { background: #fef2f2; }
+      #ctx-menu .item:hover, #io-menu .item:hover { background: #f1f5f9; }
+      #ctx-menu .item .kbd, #io-menu .item .kbd { color: #94a3b8; font-size: 11px; }
+      #ctx-menu .divider, #io-menu .divider { height: 1px; background: #e2e8f0; margin: 5px 8px; }
+      #ctx-menu .item.disabled, #io-menu .item.disabled { color: #cbd5e1; cursor: default; }
+      #ctx-menu .item.danger, #io-menu .item.danger { color: #dc2626; }
+      #ctx-menu .item.danger:hover, #io-menu .item.danger:hover { background: #fef2f2; }
+      #io-menu .io-group {
+        font-size: 11px; color: #94a3b8; padding: 6px 12px 3px;
+        font-weight: 600; letter-spacing: 0.5px;
+      }
 
       /* 缩放工具条 */
       #zoom-bar {
@@ -152,10 +156,19 @@
           <option value="forest">森绿</option>
         </select>
         <button id="view-toggle">大纲视图</button>
-        <button id="import-xmind">导入 XMind</button>
-        <button id="export-xmind">导出 XMind</button>
-        <button id="export-md">导出 MD</button>
-        <button id="export-png">导出 PNG</button>
+        <div id="io-menu" style="position:fixed;z-index:1000;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 10px 40px rgba(15,23,42,0.14);padding:6px;min-width:200px;display:none">
+          <div class="io-group">导入</div>
+          <div class="item" data-io="import-xmind">XMind 文件 (.xmind)<span class="kbd">从本地导入</span></div>
+          <div class="item" data-io="import-md">Markdown 大纲 (.md)<span class="kbd">从本地导入</span></div>
+          <div class="item" data-io="import-json">导图 JSON (.json)<span class="kbd">从本地导入</span></div>
+          <div class="divider"></div>
+          <div class="io-group">导出</div>
+          <div class="item" data-io="export-xmind">XMind 文件 (.xmind)</div>
+          <div class="item" data-io="export-md">Markdown 大纲 (.md)</div>
+          <div class="item" data-io="export-png">PNG 图片 (.png)</div>
+          <div class="item" data-io="export-json">导图 JSON (.json)<span class="kbd">含批注/ID</span></div>
+        </div>
+        <button id="io-toggle">导入 / 导出</button>
         <button id="ai-toggle" class="primary" style="background:#7c3aed;border-color:#7c3aed">✦ AI 助手</button>
         <button id="btn-expand-all">全部展开</button>
         <button id="btn-collapse-all">全部折叠</button>

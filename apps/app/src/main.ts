@@ -978,7 +978,7 @@ outlinePane.addEventListener('click', (e) => {
   renderOutline();
 });
 
-// ---------- 导入/导出 ----------
+// ---------- 导入/导出菜单 ----------
 function download(filename: string, data: BlobPart, type: string): void {
   const blob = new Blob([data], { type });
   const url = URL.createObjectURL(blob);
@@ -989,14 +989,53 @@ function download(filename: string, data: BlobPart, type: string): void {
   URL.revokeObjectURL(url);
 }
 
-document.getElementById('import-xmind')?.addEventListener('click', () => {
+/** 从本地选一个文件读入（accept 传 MIME/扩展名过滤器） */
+function pickFile(accept: string, onload: (buf: ArrayBuffer) => void): void {
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = '.xmind';
+  input.accept = accept;
   input.onchange = () => {
     const f = input.files?.[0];
     if (!f) return;
-    f.arrayBuffer().then((buf) => {
+    f.arrayBuffer().then(onload);
+  };
+  input.click();
+}
+
+const ioMenuEl = document.getElementById('io-menu') as HTMLDivElement;
+const ioToggleBtn = document.getElementById('io-toggle') as HTMLButtonElement;
+
+/** 菜单锚定到按钮下方，右缘对齐按钮右缘 */
+function showIoMenu(): void {
+  const r = ioToggleBtn.getBoundingClientRect();
+  ioMenuEl.style.left = `${Math.max(8, r.right - 220)}px`;
+  ioMenuEl.style.top = `${r.bottom + 6}px`;
+  ioMenuEl.style.display = 'block';
+}
+function hideIoMenu(): void {
+  ioMenuEl.style.display = 'none';
+}
+
+ioToggleBtn.addEventListener('click', () => {
+  if (ioMenuEl.style.display === 'block') hideIoMenu();
+  else showIoMenu();
+});
+// 点外部关闭
+window.addEventListener('pointerdown', (e) => {
+  const t = e.target as Node;
+  if (ioMenuEl.style.display === 'block' && !ioMenuEl.contains(t) && t !== ioToggleBtn) {
+    hideIoMenu();
+  }
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && ioMenuEl.style.display === 'block') hideIoMenu();
+});
+
+// ---------- 各操作实现 ----------
+const ioActions: Record<string, () => void> = {
+  // 导入 XMind（Zen 新格式 + XMind 8 旧格式）
+  'import-xmind'(): void {
+    pickFile('.xmind', (buf) => {
       try {
         const { tree, warnings } = decodeXmind(new Uint8Array(buf), registry);
         loadDoc({
@@ -1010,38 +1049,76 @@ document.getElementById('import-xmind')?.addEventListener('click', () => {
         alert(`导入失败：${(e as Error).message}`);
       }
     });
-  };
-  input.click();
-});
+  },
+  // 导入 Markdown 大纲（此前只有导出，这里补齐互转闭环）
+  'import-md'(): void {
+    pickFile('.md,.markdown,.txt', (buf) => {
+      try {
+        const text = new TextDecoder().decode(buf);
+        const { tree, warnings } = decodeMarkdown(text);
+        loadDoc({
+          version: 1,
+          meta: { title: tree.text, updatedAt: new Date().toISOString() },
+          tree,
+          annotations: [],
+        });
+        if (warnings.length) alert(`导入完成，${warnings.length} 条警告：\n${warnings.slice(0, 5).join('\n')}`);
+      } catch (e) {
+        alert(`导入失败：${(e as Error).message}`);
+      }
+    });
+  },
+  // 导入导图 JSON（含批注/节点 id/props——完整备份恢复）
+  'import-json'(): void {
+    pickFile('.json', (buf) => {
+      try {
+        const d = JSON.parse(new TextDecoder().decode(buf)) as MindDocument;
+        loadDoc(d);
+      } catch (e) {
+        alert(`导入失败：${(e as Error).message}`);
+      }
+    });
+  },
+  'export-xmind'(): void {
+    try {
+      const bytes = encodeXmind(store.root, store.document.meta.title);
+      download(`${store.document.meta.title || 'mindmap'}.xmind`, bytes.slice().buffer, 'application/octet-stream');
+    } catch (e) {
+      alert(`导出失败：${(e as Error).message}`);
+    }
+  },
+  'export-md'(): void {
+    try {
+      const md = encodeMarkdown(store.root);
+      download(`${store.document.meta.title || 'mindmap'}.md`, md, 'text/markdown');
+    } catch (e) {
+      alert(`导出失败：${(e as Error).message}`);
+    }
+  },
+  'export-png'(): void {
+    const url = renderer.exportPNG();
+    if (!url) {
+      alert('当前导图过大（全展开超过 5 万节点高度），导出会小到不可读。\n请先折叠部分分支（右键 → 展开折叠 / 全部折叠按钮）再导出 PNG。');
+      return;
+    }
+    // dataURL → Blob（download() 收 BlobPart）
+    const bin = atob(url.split(',')[1] ?? '');
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    download(`${store.document.meta.title || 'mindmap'}.png`, bytes.buffer, 'image/png');
+  },
+  'export-json'(): void {
+    download(`${store.document.meta.title || 'mindmap'}.json`, JSON.stringify(store.toJSON(), null, 2), 'application/json');
+  },
+};
 
-document.getElementById('export-xmind')?.addEventListener('click', () => {
-  try {
-    const bytes = encodeXmind(store.root, store.document.meta.title);
-    download(`${store.document.meta.title || 'mindmap'}.xmind`, bytes.slice().buffer, 'application/octet-stream');
-  } catch (e) {
-    alert(`导出失败：${(e as Error).message}`);
-  }
-});
-
-document.getElementById('export-md')?.addEventListener('click', () => {
-  try {
-    const md = encodeMarkdown(store.root);
-    download(`${store.document.meta.title || 'mindmap'}.md`, md, 'text/markdown');
-  } catch (e) {
-    alert(`导出失败：${(e as Error).message}`);
-  }
-});
-
-document.getElementById('export-png')?.addEventListener('click', () => {
-  const url = renderer.exportPNG();
-  if (!url) {
-    alert('当前导图过大（全展开超过 5 万节点高度），导出会小到不可读。\n请先折叠部分分支（右键 → 展开折叠 / 全部折叠按钮）再导出 PNG。');
-    return;
-  }
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${store.document.meta.title || 'mindmap'}.png`;
-  a.click();
+// 菜单项点击分发
+ioMenuEl.querySelectorAll('.item[data-io]').forEach((el) => {
+  el.addEventListener('click', () => {
+    const key = (el as HTMLElement).dataset.io!;
+    hideIoMenu();
+    ioActions[key]?.();
+  });
 });
 
 // ---------- 工具条 ----------
