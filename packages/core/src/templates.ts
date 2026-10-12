@@ -297,7 +297,17 @@ export function renderMethodPrompt(dimensions: string[]): string {
     );
   }
   parts.push('每条用例 props 带 priority（P0-P3）；能写 steps/expected 的写全。');
-  parts.push('add_subtree 时用例挂在对应维度的 folder 节点下（query_tree 找到带 method 标注的一级节点，其 id 即 parentId）。');
+  parts.push(
+    [
+      '树的结构必须多级拆分，严禁在维度下直接平铺用例：',
+      '第 1 级 = 测试维度（已有，带 method 标注，不要改动）；',
+      '第 2 级 = 功能点（被测对象的功能模块，如"登录""订单创建"，一个 folder 对应一个功能点）；',
+      '第 3 级 = 测试点（该功能点下按设计方法拆出的具体检验项，如"密码长度边界""并发提交"，folder）；',
+      '第 4 级 = 用例（case，每个测试点下 2-6 条，props 带 priority/steps/expected）。',
+      '即：维度 → 功能点 → 测试点 → 用例。add_subtree 时按此层级一次提交整棵子树，',
+      '用 query_tree 确认维度节点 id 后，把"功能点→测试点→用例"整棵挂到对应维度下。',
+    ].join('\n'),
+  );
   return parts.join('\n');
 }
 
