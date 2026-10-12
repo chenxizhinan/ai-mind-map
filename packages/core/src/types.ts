@@ -79,4 +79,6 @@ export interface FlatNode {
   branch?: number;
   /** 换行后的文本行（布局阶段测量） */
   lines?: string[];
+  /** 类型图标（来自 NodeType.icon，布局阶段解析；无则不显示） */
+  icon?: string;
 }

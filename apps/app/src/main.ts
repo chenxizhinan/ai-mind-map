@@ -731,10 +731,19 @@ function renderPanel(): void {
   if (!node) return;
   const openCount = store.listAnnotations(node.id).filter((a) => a.status === 'open').length;
   const typeLabel = registry.has(node.type) ? registry.get(node.type).label : node.type;
+  const typeIcon = registry.has(node.type) ? registry.get(node.type).icon : undefined;
+  const iconHtml =
+    typeIcon === 'dot'
+      ? '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#2563eb;margin-right:6px"></span>'
+      : typeIcon === 'square'
+        ? '<span style="display:inline-block;width:10px;height:10px;border:1.5px solid #94a3b8;border-radius:2px;margin-right:6px"></span>'
+        : typeIcon
+          ? `<span style="margin-right:4px">${typeIcon}</span>`
+          : '';
   aside.innerHTML = `
     <div class="panel-head">
       <div class="node-path">${nodePathOf(node)}</div>
-      <div class="node-title">${escapeHtml(node.text)}</div>
+      <div class="node-title" style="display:flex;align-items:center">${iconHtml}${escapeHtml(node.text)}</div>
       <div style="font-size:11px;color:#94a3b8;margin-top:3px">${typeLabel} · ${node.id}</div>
     </div>
     <div class="tabs">
@@ -923,13 +932,21 @@ function outlineHtml(): string {
     const kids = n.children ?? [];
     const collapsed = outlineCollapsed.has(n.id);
     const priority = (n.props as { priority?: string }).priority;
+    const icon = registry.has(n.type) ? registry.get(n.type).icon : undefined;
     const toggle = kids.length
       ? `<span class="o-toggle" data-toggle="${n.id}" style="cursor:pointer;display:inline-block;width:16px;text-align:center;color:#94a3b8;font-size:11px;user-select:none">${collapsed ? '▸' : '▾'}</span>`
       : '<span style="display:inline-block;width:16px"></span>';
+    const iconSpan = icon
+      ? icon === 'dot'
+        ? `<span class="o-icon" title="${escapeHtml(typeLabelOf(n.type))}" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#2563eb;margin-left:4px;flex-shrink:0;align-self:center"></span>`
+        : icon === 'square'
+          ? `<span class="o-icon" title="${escapeHtml(typeLabelOf(n.type))}" style="display:inline-block;width:9px;height:9px;border:1.5px solid #94a3b8;border-radius:2px;margin-left:4px;flex-shrink:0;align-self:center"></span>`
+          : `<span class="o-icon" title="${escapeHtml(typeLabelOf(n.type))}" style="font-size:12px;user-select:none;margin-left:2px">${icon}</span>`
+      : '';
     const badge = priority && depth > 0 ? `<span class="o-badge" style="font-size:10px;background:#e2e8f0;border-radius:4px;padding:1px 5px;margin-left:6px;color:#475569">${escapeHtml(priority)}</span>` : '';
     return `
       <div class="o-row" data-node="${n.id}" style="margin-left:${depth * 22}px;display:flex;align-items:baseline;gap:2px;padding:3px 6px;border-radius:6px">
-        ${toggle}${badge}
+        ${toggle}${iconSpan}${badge}
         <span class="o-text" contenteditable="plaintext-only" data-otext="${n.id}" style="flex:1;outline:none;border-radius:4px;padding:2px 6px">${escapeHtml(n.text)}</span>
         <span style="font-size:10px;color:#cbd5e1;user-select:none">${kids.length ? `${kids.length}` : ''}</span</span>
       </div>
@@ -937,6 +954,11 @@ function outlineHtml(): string {
     `;
   };
   return render(store.root, 0);
+}
+
+/** 类型展示名（未注册类型回退为其 name） */
+function typeLabelOf(type: string): string {
+  return registry.has(type) ? registry.get(type).label : type;
 }
 
 function renderOutline(): void {

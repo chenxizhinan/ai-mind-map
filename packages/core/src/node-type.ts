@@ -11,6 +11,13 @@ export interface NodeType<TProps extends Record<string, unknown> = Record<string
   name: string;
   /** 展示名（UI 用） */
   label: string;
+  /**
+   * 类型标识符号（画在节点文本前、大纲行、侧边面板）。单色矢量：
+   * 'dot' = 实心圆点（叶子项），'square' = 空心方框（容器）。
+   * 也可以给任意单字符（emoji/符号），renderer 会按文本绘制。
+   * 不提供时不显示图标。
+   */
+  readonly icon?: string;
   /** 该类型能否作为叶子（无子节点）。如 case 应为 true；path 应为 false。 */
   readonly leafOnly?: boolean;
   /** 树视图中该类型节点允许的最大子节点数；Infinity 表示不限 */

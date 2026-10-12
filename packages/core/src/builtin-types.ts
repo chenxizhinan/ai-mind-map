@@ -23,6 +23,7 @@ const PRIORITIES = new Set(['P0', 'P1', 'P2', 'P3']);
 export const folderType: NodeType<FolderProps> = {
   name: 'folder',
   label: '模块/路径',
+  icon: 'square',
   role: 'container',
   normalizeProps(input) {
     const p = (input ?? {}) as Partial<FolderProps>;
@@ -35,6 +36,7 @@ export const folderType: NodeType<FolderProps> = {
 export const caseType: NodeType<CaseProps> = {
   name: 'case',
   label: '测试用例',
+  icon: 'dot',
   role: 'leaf',
   leafOnly: true,
   normalizeProps(input) {

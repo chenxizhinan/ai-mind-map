@@ -109,10 +109,19 @@ export function layoutTree(
     return badges.length ? 34 : 0;
   };
 
+  // 类型图标位（NodeType.icon）：图标 16px + 间距 4px
+  const iconW = (n: BaseNode): number => {
+    if (!registry.has(n.type)) return 0;
+    return registry.get(n.type).icon ? 20 : 0;
+  };
+
   const measure = (n: BaseNode): { w: number; h: number; lines: string[] } => {
-    const avail = MAX_W - o.paddingX * 2 - badgeW(n);
+    const avail = MAX_W - o.paddingX * 2 - badgeW(n) - iconW(n);
     const lines = wrapText(String(n.text ?? ''), avail);
-    const w = Math.max(MIN_W, Math.min(MAX_W, Math.max(...lines.map(textWidth)) + o.paddingX * 2 + badgeW(n)));
+    const w = Math.max(
+      MIN_W,
+      Math.min(MAX_W, Math.max(...lines.map(textWidth)) + o.paddingX * 2 + badgeW(n) + iconW(n)),
+    );
     const h = Math.max(36, lines.length * o.lineHeight + 14);
     return { w, h, lines };
   };
@@ -177,6 +186,7 @@ export function layoutTree(
       side,
       branch: depth === 1 ? branchIdx : undefined,
       lines: m.lines,
+      icon: registry.has(n.type) ? registry.get(n.type).icon : undefined,
     };
     out.push(flat);
     byId.set(flat.id, flat);
@@ -225,6 +235,7 @@ export function layoutTree(
     side: 'right',
     branch: -1,
     lines: rootM.lines,
+    icon: registry.has(root.type) ? registry.get(root.type).icon : undefined,
   });
 
   let rc = rootY + rootM.h / 2 - rightH / 2;

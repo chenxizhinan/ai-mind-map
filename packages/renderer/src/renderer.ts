@@ -789,18 +789,44 @@ export class MindRenderer {
       }
     }
 
-    // 文本（多行，左枝右对齐）
+    // 文本（多行，左枝右对齐）；有类型图标时文本缩进一个图标位
     ctx.fillStyle = isRoot ? this.theme.rootText : this.theme.leafText;
     const fs = Math.max(8, 14 * s);
     ctx.font = `${isRoot ? '600 ' : ''}${fs}px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
     ctx.textBaseline = 'middle';
     const lineH = 22 * s;
+    const iconOffset = n.icon ? 20 * s : 0;
     const firstY = p0.y + (h - n.lines!.length * lineH) / 2 + lineH / 2;
+    if (n.icon) {
+      const iconColor = color === this.theme.rootFill ? this.theme.rootText : color;
+      const iconCy = n.lines!.length > 1 ? firstY : p0.y + h / 2;
+      const iconCx = p0.x + 8 * s + 5 * s; // 图标中心 x（16px 位内）
+      const r = 4 * s;
+      if (n.icon === 'dot') {
+        // 实心圆点（叶子项，如测试用例）
+        ctx.beginPath();
+        ctx.arc(iconCx, iconCy, r, 0, Math.PI * 2);
+        ctx.fillStyle = iconColor;
+        ctx.fill();
+      } else if (n.icon === 'square') {
+        // 空心方框（容器，如模块路径）
+        ctx.beginPath();
+        ctx.roundRect(iconCx - r, iconCy - r, r * 2, r * 2, 1.5 * s);
+        ctx.strokeStyle = iconColor;
+        ctx.lineWidth = 1.5 * s;
+        ctx.stroke();
+      } else {
+        // 自定义单字符（emoji/符号）：按文本绘制
+        ctx.font = `${Math.max(9, 13 * s)}px -apple-system, "Apple Color Emoji", "PingFang SC", sans-serif`;
+        ctx.fillText(n.icon, p0.x + 8 * s, iconCy);
+      }
+    }
+    ctx.font = `${isRoot ? '600 ' : ''}${fs}px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
     n.lines!.forEach((line, i) => {
       if (n.side === 'left') {
-        ctx.fillText(line, p0.x + w - 8 * s - textWOf(line, fs), firstY + i * lineH);
+        ctx.fillText(line, p0.x + w - 8 * s - textWOf(line, fs) - iconOffset, firstY + i * lineH);
       } else {
-        ctx.fillText(line, p0.x + 8 * s, firstY + i * lineH);
+        ctx.fillText(line, p0.x + 8 * s + iconOffset, firstY + i * lineH);
       }
     });
 
