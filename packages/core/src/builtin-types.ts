@@ -17,27 +17,9 @@ export interface CaseProps extends Record<string, unknown> {
   precondition?: string;
   steps?: string[];
   expected?: string;
-  tags?: string[];
-  /** 负责人 */
-  owner?: string;
-  /** 用例状态：draft(草稿)/reviewing(待评审)/reviewed(已评审)/executed(已执行)/deprecated(已废弃) */
-  status?: CaseStatus;
-  /** 关联需求 / Story 标识 */
-  requirement?: string;
   /** 备注 */
   remark?: string;
 }
-
-export const CASE_STATUSES = ['draft', 'reviewing', 'reviewed', 'executed', 'deprecated'] as const;
-export type CaseStatus = (typeof CASE_STATUSES)[number];
-
-export const CASE_STATUS_LABELS: Record<CaseStatus, string> = {
-  draft: '草稿',
-  reviewing: '待评审',
-  reviewed: '已评审',
-  executed: '已执行',
-  deprecated: '已废弃',
-};
 
 export const CASE_TYPES = [
   { key: 'functional', label: '功能' },
@@ -53,7 +35,6 @@ export const CASE_TYPES = [
 ] as const;
 
 const CASE_TYPE_KEYS: Set<string> = new Set(CASE_TYPES.map((t) => t.key));
-const CASE_STATUS_KEYS = new Set<string>(CASE_STATUSES);
 
 const PRIORITIES = new Set(['P0', 'P1', 'P2', 'P3']);
 
@@ -106,9 +87,6 @@ export const caseType: NodeType<CaseProps> = {
       steps: Array.isArray(p.steps) ? p.steps.map(String) : undefined,
       expected: typeof p.expected === 'string' ? p.expected : undefined,
       tags: Array.isArray(p.tags) ? p.tags.map(String) : undefined,
-      owner: typeof p.owner === 'string' && p.owner ? p.owner : undefined,
-      status: typeof p.status === 'string' && CASE_STATUS_KEYS.has(p.status) ? p.status : undefined,
-      requirement: typeof p.requirement === 'string' && p.requirement ? p.requirement : undefined,
       remark: typeof p.remark === 'string' ? p.remark : undefined,
     });
   },
@@ -117,9 +95,6 @@ export const caseType: NodeType<CaseProps> = {
     const badges: Badge[] = [];
     if (p.priority) badges.push({ text: p.priority, tone: priorityTone(p.priority) });
     if (p.steps?.length) badges.push({ text: `${p.steps.length}步`, tone: 'muted' });
-    if (p.status && p.status !== 'reviewed') {
-      badges.push({ text: CASE_STATUS_LABELS[p.status], tone: p.status === 'deprecated' ? 'critical' : 'info' });
-    }
     return badges;
   },
 };

@@ -29,7 +29,6 @@ function applyTheme(name: string): void {
 }
 import {
   BUILTIN_TEMPLATES,
-  CASE_STATUS_LABELS,
   CASE_TYPES,
   type CaseProps,
   buildTemplateDoc,
@@ -970,34 +969,11 @@ function renderInfoForm(body: HTMLElement, node: MindNode): void {
           </select>
         </div>
         <div>
-          <label>状态</label>
-          <select id="f-status">
-            <option value="">未设置</option>
-            ${Object.entries(CASE_STATUS_LABELS).map(([k, label]) => `<option value="${k}" ${p.status === k ? 'selected' : ''}>${label}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-      <div class="field" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div>
           <label>用例类型</label>
           <select id="f-casetype">
             <option value="">未设置</option>
             ${CASE_TYPES.map((t) => `<option value="${t.key}" ${p.caseType === t.key ? 'selected' : ''}>${t.label}</option>`).join('')}
           </select>
-        </div>
-        <div>
-          <label>负责人</label>
-          <input id="f-owner" value="${escapeHtml(p.owner ?? '')}" placeholder="如：张三" />
-        </div>
-      </div>
-      <div class="field" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div>
-          <label>关联需求</label>
-          <input id="f-requirement" value="${escapeHtml(p.requirement ?? '')}" placeholder="如：REQ-1024 / Story#88" />
-        </div>
-        <div>
-          <label>标签（逗号分隔）</label>
-          <input id="f-tags" value="${escapeHtml((p.tags ?? []).join(','))}" placeholder="回归,冒烟" />
         </div>
       </div>
       <div class="field">
@@ -1033,21 +1009,12 @@ function renderInfoForm(body: HTMLElement, node: MindNode): void {
         .map((t) => (t as HTMLTextAreaElement).value.trim())
         .filter(Boolean);
       const priority = (document.getElementById('f-priority') as HTMLSelectElement).value;
-      const status = (document.getElementById('f-status') as HTMLSelectElement).value;
       const caseType = (document.getElementById('f-casetype') as HTMLSelectElement).value;
-      const tags = (document.getElementById('f-tags') as HTMLInputElement).value
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
       snapshot();
       store.updateNode(node.id, {
         props: {
           priority: priority || undefined,
-          status: status || undefined,
           caseType: caseType || undefined,
-          owner: (document.getElementById('f-owner') as HTMLInputElement).value.trim() || undefined,
-          requirement: (document.getElementById('f-requirement') as HTMLInputElement).value.trim() || undefined,
-          tags: tags.length ? tags : undefined,
           precondition: (document.getElementById('f-precondition') as HTMLTextAreaElement).value.trim() || undefined,
           steps: steps.length ? steps : undefined,
           expected: (document.getElementById('f-expected') as HTMLTextAreaElement).value.trim() || undefined,
