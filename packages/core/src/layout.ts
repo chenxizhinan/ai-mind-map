@@ -12,8 +12,14 @@ export interface LayoutOptions {
   defaultExpandDepth?: number;
   /** 显式展开集合（交互式折叠）。提供后默认深度失效。 */
   expandedIds?: Set<string>;
-  /** 布局方向：right=全部右侧；both=经典地图（根两侧分布，默认） */
-  direction?: 'right' | 'both';
+  /**
+   * 布局方向（对齐 XMind 结构图式）：
+   * - 'right'：逻辑图，全部右侧
+   * - 'both'：经典地图，根两侧交替（默认）
+   * - 'down'：组织结构图，根在上，子级横向展开向下生长
+   * - 'up'：向上树，根在下，子级横向展开向上生长
+   */
+  direction?: 'right' | 'both' | 'down' | 'up';
 }
 
 const DEFAULTS = {
@@ -133,50 +139,155 @@ export function layoutTree(
     return { w, h, lines };
   };
 
-  // ---------- 侧向分配 ----------
-  const rightTop: BaseNode[] = [];
-  const leftTop: BaseNode[] = [];
-  (root.children ?? []).forEach((c, i) => {
-    if (o.direction === 'right' || i % 2 === 0) rightTop.push(c);
-    else leftTop.push(c);
-  });
+  // ---------- 主流程分支 ----------
+  const rootM = measure(root);
+  const byId = new Map<string, FlatNode>();
 
-  /** 可见子树总高（折叠则只算自身） */
-  function stackHeight(n: BaseNode): number {
-    const kids = n.children ?? [];
-    if (!expanded.has(idOf(n)) || kids.length === 0) return measure(n).h;
-    let h = 0;
-    for (const c of kids) h += stackHeight(c);
-    h += o.siblingGap * (kids.length - 1);
-    return Math.max(h, measure(n).h);
+  if (o.direction === 'right' || o.direction === 'both') {
+    // ===== 横向布局：逻辑图（right）/ 经典地图（both） =====
+    const rightTop: BaseNode[] = [];
+    const leftTop: BaseNode[] = [];
+    (root.children ?? []).forEach((c, i) => {
+      if (o.direction === 'right' || i % 2 === 0) rightTop.push(c);
+      else leftTop.push(c);
+    });
+
+    /** 可见子树总高（折叠则只算自身） */
+    function stackHeight(n: BaseNode): number {
+      const kids = n.children ?? [];
+      if (!expanded.has(idOf(n)) || kids.length === 0) return measure(n).h;
+      let h = 0;
+      for (const c of kids) h += stackHeight(c);
+      h += o.siblingGap * (kids.length - 1);
+      return Math.max(h, measure(n).h);
+    }
+
+    /** 直接可见后代的栈高（不含父自身，居中用） */
+    function innerStackH(n: BaseNode): number {
+      const kids = n.children ?? [];
+      if (!expanded.has(idOf(n)) || kids.length === 0) return 0;
+      let h = 0;
+      for (const c of kids) h += stackHeight(c) + o.siblingGap;
+      return h - o.siblingGap;
+    }
+
+    /** 横向放置一棵子树及其可见后代 */
+    function placeStack(
+      n: BaseNode,
+      top: number,
+      side: 'left' | 'right',
+      branchIdx: number,
+      parentId: string | null,
+      depth: number,
+    ): void {
+      const m = measure(n);
+      let x: number;
+      if (depth === 1) {
+        x = side === 'right' ? rootM.w + o.levelGap : -o.levelGap - m.w;
+      } else {
+        const p = byId.get(parentId!)!;
+        x = side === 'right' ? p.x + p.w + o.levelGap : p.x - o.levelGap - m.w;
+      }
+      const flat: FlatNode = {
+        id: idOf(n),
+        type: n.type,
+        text: String(n.text ?? ''),
+        props: n.props ?? {},
+        depth,
+        parentId,
+        x,
+        y: top,
+        w: m.w,
+        h: m.h,
+        hidden: false,
+        childCount: (n.children ?? []).length,
+        side,
+        branch: depth === 1 ? branchIdx : undefined,
+        lines: m.lines,
+        icon: resolveIcon(n),
+      };
+      out.push(flat);
+      byId.set(flat.id, flat);
+      const kids = n.children ?? [];
+      if (expanded.has(idOf(n)) && kids.length > 0) {
+        let cursor = top + m.h / 2 - innerStackH(n) / 2;
+        for (const k of kids) {
+          placeStack(k, cursor, side, branchIdx, n.id, depth + 1);
+          cursor += stackHeight(k) + o.siblingGap;
+        }
+      }
+    }
+
+    const rightH = rightTop.reduce((acc, c) => acc + stackHeight(c), 0) + o.siblingGap * Math.max(0, rightTop.length - 1);
+    const leftH = leftTop.reduce((acc, c) => acc + stackHeight(c), 0) + o.siblingGap * Math.max(0, leftTop.length - 1);
+    const totalH = Math.max(rightH, leftH, rootM.h);
+    const rootY = (totalH - rootM.h) / 2;
+
+    out.push({
+      id: idOf(root),
+      type: root.type,
+      text: String(root.text ?? ''),
+      props: root.props ?? {},
+      depth: 0,
+      parentId: null,
+      x: 0,
+      y: rootY,
+      w: rootM.w,
+      h: rootM.h,
+      hidden: false,
+      childCount: (root.children ?? []).length,
+      side: 'right',
+      branch: -1,
+      lines: rootM.lines,
+      icon: resolveIcon(root),
+      axis: 'h',
+    });
+
+    let rc = rootY + rootM.h / 2 - rightH / 2;
+    rightTop.forEach((c, i) => {
+      placeStack(c, rc, 'right', i, root.id, 1);
+      rc += stackHeight(c) + o.siblingGap;
+    });
+    let lc = rootY + rootM.h / 2 - leftH / 2;
+    leftTop.forEach((c, i) => {
+      placeStack(c, lc, 'left', rightTop.length + i, root.id, 1);
+      lc += stackHeight(c) + o.siblingGap;
+    });
+    return out;
   }
 
-  /** 直接可见后代的栈高（不含父自身，居中用） */
-  function innerStackH(n: BaseNode): number {
+  // ===== 纵向布局（down：组织结构图 / up：向上树） =====
+  // 父子纵向，同级横向展开；同级超过 maxRowWidth 自动换行（XMind 组织结构图行为）。
+  const dirSign: 1 | -1 = o.direction === 'down' ? 1 : -1;
+  const rowGap = o.levelGap; // 父缘到子缘的行间距
+  const maxRowWidth = 3200;  // 单行最大宽度，超过则换行
+
+  /** 可见子树总宽（折叠则只算自身） */
+  function subtreeW(n: BaseNode): number {
     const kids = n.children ?? [];
-    if (!expanded.has(idOf(n)) || kids.length === 0) return 0;
-    let h = 0;
-    for (const c of kids) h += stackHeight(c) + o.siblingGap;
-    return h - o.siblingGap;
+    if (!expanded.has(idOf(n)) || kids.length === 0) return measure(n).w;
+    let w = 0;
+    for (const c of kids) w += subtreeW(c);
+    w += o.siblingGap * (kids.length - 1);
+    return Math.max(w, measure(n).w);
   }
 
-  /** 放置一棵子树及其可见后代 */
-  function placeStack(
+  /**
+   * 纵向放置：n 左缘 x=left；down 时顶缘 y=edge，up 时底缘 y=edge。
+   * 子级横排（自动换行），父居中于子级整体包围盒。
+   * 返回该子树的占用包围盒（相对世界坐标），供上层布局参考。
+   */
+  function placeVertical(
     n: BaseNode,
-    top: number,
-    side: 'left' | 'right',
+    left: number,
+    edge: number,        // down: 该行顶缘 y；up: 该行底缘 y
+    dirSign: 1 | -1,
     branchIdx: number,
     parentId: string | null,
     depth: number,
   ): void {
     const m = measure(n);
-    let x: number;
-    if (depth === 1) {
-      x = side === 'right' ? rootEdgeR + o.levelGap : rootEdgeL - o.levelGap - m.w;
-    } else {
-      const p = byId.get(parentId!)!;
-      x = side === 'right' ? p.x + p.w + o.levelGap : p.x - o.levelGap - m.w;
-    }
+    const y = dirSign === 1 ? edge : edge - m.h;
     const flat: FlatNode = {
       id: idOf(n),
       type: n.type,
@@ -184,47 +295,72 @@ export function layoutTree(
       props: n.props ?? {},
       depth,
       parentId,
-      x,
-      y: top,
+      x: left,
+      y,
       w: m.w,
       h: m.h,
       hidden: false,
       childCount: (n.children ?? []).length,
-      side,
+      // side 仅作连线方向提示：down=子从父底缘出（right），up=子从父顶缘出（left）
+      side: dirSign === 1 ? 'right' : 'left',
       branch: depth === 1 ? branchIdx : undefined,
       lines: m.lines,
       icon: resolveIcon(n),
+      axis: 'v',
     };
     out.push(flat);
     byId.set(flat.id, flat);
     const kids = n.children ?? [];
     if (expanded.has(idOf(n)) && kids.length > 0) {
-      let cursor = top + m.h / 2 - innerStackH(n) / 2;
+      // 把子级按宽度切成若干行（贪心装箱），每行内子树间距 siblingGap
+      const rows: BaseNode[][] = [];
+      let row: BaseNode[] = [];
+      let rowW = 0;
       for (const k of kids) {
-        placeStack(k, cursor, side, branchIdx, n.id, depth + 1);
-        cursor += stackHeight(k) + o.siblingGap;
+        const kw = subtreeW(k);
+        if (row.length && rowW + o.siblingGap + kw > maxRowWidth) {
+          rows.push(row);
+          row = [];
+          rowW = 0;
+        }
+        if (row.length) rowW += o.siblingGap;
+        row.push(k);
+        rowW += kw;
+      }
+      if (row.length) rows.push(row);
+
+      // 各行依次放置（down 向下长，up 向上长）；行高 = 行内最高子树
+      let rowEdge = dirSign === 1 ? y + m.h + rowGap : y - rowGap;
+      for (const r of rows) {
+        const rW = r.reduce((acc, k) => acc + subtreeW(k), 0) + o.siblingGap * (r.length - 1);
+        const rH = Math.max(...r.map((k) => measure(k).h));
+        let cursor = left + m.w / 2 - rW / 2; // 行居中于父节点中心
+        for (const k of r) {
+          placeVertical(k, cursor, rowEdge, dirSign, branchIdx, n.id, depth + 1);
+          cursor += subtreeW(k) + o.siblingGap;
+        }
+        rowEdge = dirSign === 1 ? rowEdge + rH + rowGap : rowEdge - rH - rowGap;
       }
     }
   }
 
-  const byId = new Map<string, FlatNode>();
-
-  // ---------- 主流程 ----------
-  const rootM = measure(root);
-  let rightH = 0;
-  rightTop.forEach((c, i) => {
-    rightH += stackHeight(c) + (i < rightTop.length - 1 ? o.siblingGap : 0);
-  });
-  let leftH = 0;
-  leftTop.forEach((c, i) => {
-    leftH += stackHeight(c) + (i < leftTop.length - 1 ? o.siblingGap : 0);
-  });
-  const totalH = Math.max(rightH, leftH, rootM.h);
-  const rootY = (totalH - rootM.h) / 2;
-
-  // 世界原点 = 根节点左缘；右树从根右缘向右，左树向负方向延伸
-  const rootEdgeL = 0;
-  const rootEdgeR = rootM.w;
+  // 根放在原点；子树行从 x=0 起排（placeVertical 内部按父中心居中），根居中于第一行宽
+  const firstRowNodes = root.children ?? [];
+  let firstRowW = 0;
+  {
+    // 模拟第一行的行切分，取第一行宽度用于根定位
+    let rowW = 0;
+    let count = 0;
+    for (const k of firstRowNodes) {
+      const kw = subtreeW(k);
+      if (count && rowW + o.siblingGap + kw > maxRowWidth) break;
+      if (count) rowW += o.siblingGap;
+      rowW += kw;
+      count++;
+    }
+    firstRowW = rowW;
+  }
+  const rootX = firstRowW > rootM.w ? (firstRowW - rootM.w) / 2 : 0;
 
   out.push({
     id: idOf(root),
@@ -233,8 +369,8 @@ export function layoutTree(
     props: root.props ?? {},
     depth: 0,
     parentId: null,
-    x: 0,
-    y: rootY,
+    x: rootX,
+    y: 0,
     w: rootM.w,
     h: rootM.h,
     hidden: false,
@@ -243,18 +379,40 @@ export function layoutTree(
     branch: -1,
     lines: rootM.lines,
     icon: resolveIcon(root),
+    axis: 'v',
   });
 
-  let rc = rootY + rootM.h / 2 - rightH / 2;
-  rightTop.forEach((c, i) => {
-    placeStack(c, rc, 'right', i, root.id, 1);
-    rc += stackHeight(c) + o.siblingGap;
-  });
-  let lc = rootY + rootM.h / 2 - leftH / 2;
-  leftTop.forEach((c, i) => {
-    placeStack(c, lc, 'left', rightTop.length + i, root.id, 1);
-    lc += stackHeight(c) + o.siblingGap;
-  });
+  {
+    // 根的子级同样按行切分（与 placeVertical 内部逻辑一致），各行居中于根中心
+    const kids = root.children ?? [];
+    const rows: Array<Array<{ k: BaseNode; i: number }>> = [];
+    let row: Array<{ k: BaseNode; i: number }> = [];
+    let rowW = 0;
+    kids.forEach((k, i) => {
+      const kw = subtreeW(k);
+      if (row.length && rowW + o.siblingGap + kw > maxRowWidth) {
+        rows.push(row);
+        row = [];
+        rowW = 0;
+      }
+      if (row.length) rowW += o.siblingGap;
+      row.push({ k, i });
+      rowW += kw;
+    });
+    if (row.length) rows.push(row);
+
+    let rowEdge = dirSign === 1 ? rootM.h + rowGap : -rowGap;
+    for (const r of rows) {
+      const rW = r.reduce((acc, e) => acc + subtreeW(e.k), 0) + o.siblingGap * (r.length - 1);
+      const rH = Math.max(...r.map((e) => measure(e.k).h));
+      let cursor = rootX + rootM.w / 2 - rW / 2;
+      for (const e of r) {
+        placeVertical(e.k, cursor, rowEdge, dirSign, e.i, root.id, 1);
+        cursor += subtreeW(e.k) + o.siblingGap;
+      }
+      rowEdge = dirSign === 1 ? rowEdge + rH + rowGap : rowEdge - rH - rowGap;
+    }
+  }
 
   return out;
 }

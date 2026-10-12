@@ -715,16 +715,39 @@ export class MindRenderer {
   private drawLink(p: FlatNode, n: FlatNode): void {
     const ctx = this.ctx;
     const s = this.vp.scale;
-    // 左侧子树的连线从父节点左缘出发（否则会横穿父节点框）
+    const color = this.branchColor(n);
+    const width = Math.max(1, (this.theme.linkBaseWidth - Math.min(n.depth - 1, 3) * 0.9) * s);
+    ctx.strokeStyle = withAlpha(color, Math.max(0.2, 0.55 - Math.min(n.depth - 1, 4) * 0.07));
+    ctx.lineWidth = width;
+
+    if (n.axis === 'v') {
+      // 纵向布局：父底(顶)缘中点 → 子顶(底)缘中点，垂直-水平-垂直圆角折线
+      const down = n.side === 'right';
+      const x1 = p.x + p.w / 2;
+      const y1 = down ? p.y + p.h : p.y;
+      const x2 = n.x + n.w / 2;
+      const y2 = down ? n.y : n.y + n.h;
+      const midY = (y1 + y2) / 2;
+      const px = this.vp.offsetX;
+      const py = this.vp.offsetY;
+      const R = Math.min(8, Math.abs(x2 - x1) / 2, Math.abs(midY - y1));
+      const rx2 = x2 > x1 ? R : -R;
+      ctx.beginPath();
+      ctx.moveTo(x1 * s + px, y1 * s + py);
+      ctx.lineTo(x1 * s + px, (midY - R * (down ? 1 : -1)) * s + py);
+      ctx.quadraticCurveTo(x1 * s + px, midY * s + py, (x1 + rx2) * s + px, midY * s + py);
+      ctx.lineTo((x2 - rx2) * s + px, midY * s + py);
+      ctx.quadraticCurveTo(x2 * s + px, midY * s + py, x2 * s + px, y2 * s + py);
+      ctx.stroke();
+      return;
+    }
+
+    // 横向布局：父右(左)缘中点 → 子左(右)缘中点，三次贝塞尔
     const x1 = n.side === 'left' ? p.x : p.x + p.w;
     const y1 = p.y + p.h / 2;
     const x2 = n.x;
     const y2 = n.y + n.h / 2;
     const mx = (x1 + x2) / 2;
-    const color = this.branchColor(n);
-    const width = Math.max(1, (this.theme.linkBaseWidth - Math.min(n.depth - 1, 3) * 0.9) * s);
-    ctx.strokeStyle = withAlpha(color, Math.max(0.2, 0.55 - Math.min(n.depth - 1, 4) * 0.07));
-    ctx.lineWidth = width;
     ctx.beginPath();
     ctx.moveTo(x1 * s + this.vp.offsetX, y1 * s + this.vp.offsetY);
     ctx.bezierCurveTo(

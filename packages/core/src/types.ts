@@ -79,6 +79,8 @@ export interface FlatNode {
   branch?: number;
   /** 换行后的文本行（布局阶段测量） */
   lines?: string[];
-  /** 类型图标（来自 NodeType.icon，布局阶段解析；无则不显示） */
+  /** 类型图标（来自 props.icon / NodeType.icon，布局阶段解析；无则不显示） */
   icon?: string;
+  /** 布局轴向：'h'=横向（左右布局），'v'=纵向（上下布局）。连线形状据此选择 */
+  axis?: 'h' | 'v';
 }

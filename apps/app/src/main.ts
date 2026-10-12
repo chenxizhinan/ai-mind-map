@@ -157,11 +157,23 @@ const renderer = new MindRenderer(canvasEl, {
 });
 void renderer;
 
+// ---------- 布局方向 ----------
+type LayoutDir = 'right' | 'both' | 'down' | 'up';
+const LAYOUT_KEY = 'ai-mind-map:layout';
+const LAYOUT_LABELS: Record<LayoutDir, string> = {
+  both: '地图（左右）',
+  right: '逻辑图（向右）',
+  down: '组织结构（向下）',
+  up: '向上树',
+};
+let layoutDir = (localStorage.getItem(LAYOUT_KEY) as LayoutDir) || 'both';
+
 /** 布局 + 渲染 + 统计 + 持久化。selected 传 id 保持选中跨布局。 */
 function relayout(): void {
   const flat = layoutTree(store.root, registry, {
     defaultExpandDepth: 2,
     expandedIds: expandedIds ?? undefined,
+    direction: layoutDir,
   });
   lastFlat = flat;
   const counts = new Map<string, number>();
@@ -1439,6 +1451,17 @@ if (savedTheme) {
 }
 document.getElementById('theme-select')?.addEventListener('change', (e) => {
   applyTheme((e.target as HTMLSelectElement).value);
+});
+
+// 布局方向切换
+const layoutSelect = document.getElementById('layout-select') as HTMLSelectElement;
+layoutSelect.value = layoutDir;
+layoutSelect.addEventListener('change', () => {
+  layoutDir = layoutSelect.value as LayoutDir;
+  localStorage.setItem(LAYOUT_KEY, layoutDir);
+  relayout();
+  renderer.focusNode(store.root.id);
+  toast(`已切换为「${LAYOUT_LABELS[layoutDir]}」布局`, 'info');
 });
 
 // 暴露给自动化测试 / 控制台调试
