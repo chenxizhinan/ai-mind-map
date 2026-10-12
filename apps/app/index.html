@@ -39,7 +39,7 @@
         padding: 3px 8px; border-radius: 7px; outline: none;
         border: 1px solid transparent; min-width: 60px;
         display: inline-block; flex-shrink: 0;
-        max-width: 320px; overflow: hidden; text-overflow: ellipsis;
+        max-width: 240px; overflow: hidden; text-overflow: ellipsis;
       }
       #doc-title:hover { background: #f8fafc; }
       #doc-title:focus { background: #fff; border-color: #93c5fd; box-shadow: 0 0 0 2px rgba(37,99,235,0.12); }
@@ -49,12 +49,21 @@
       header .title { font-weight: 600; font-size: 14px; white-space: nowrap; }
       header .stats { color: #64748b; font-size: 12px; white-space: nowrap; margin-left: 8px; cursor: pointer; }
       header .spacer { flex: 1; }
-      header button, header select {
+      header button {
         font-size: 13px; padding: 5px 10px;
         border: 1px solid #cbd5e1; border-radius: 6px; background: #fff;
         cursor: pointer; white-space: nowrap;
+        flex-shrink: 0;
       }
-      .tb-group { display: inline-flex; gap: 4px; }
+      header select {
+        font-size: 13px; padding: 5px 8px;
+        border: 1px solid #cbd5e1; border-radius: 6px; background: #fff;
+        cursor: pointer; white-space: nowrap;
+        flex-shrink: 0;
+      }
+      header #doc-title { flex-shrink: 0; }
+      header .stats { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+      .tb-group { display: inline-flex; gap: 4px; flex-shrink: 0; }
       .tb-sep { width: 1px; height: 20px; background: #e2e8f0; margin: 0 6px; flex-shrink: 0; align-self: center; }
       .tb-icon { width: 30px; text-align: center; padding: 5px 0 !important; font-size: 14px !important; }
       header button.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
@@ -216,7 +225,7 @@
               <option value="up">向上树</option>
             </select>
             <select id="theme-select" title="主题风格">
-              <option value="default">默认蓝</option>
+              <option value="default">经典</option>
               <option value="gold">黑金</option>
               <option value="forest">森绿</option>
             </select>
