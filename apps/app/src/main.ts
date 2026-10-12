@@ -1689,10 +1689,10 @@ function cardHtml(e: DocEntry): string {
       </div>
       <span style="width:110px;font-size:12.5px;color:#64748b">${nodeCount.toLocaleString()} 节点</span>
       <span style="width:150px;font-size:12px;color:#94a3b8">${when}</span>
-      <div class="doc-actions" style="width:132px;display:flex;gap:6px;justify-content:flex-end;opacity:0;transition:opacity 0.14s ease">
-        <button class="btn" data-open="${e.id}" style="background:#eff6ff;border:1px solid #bfdbfe;color:#2563eb;padding:5px 12px;border-radius:7px;font-size:12px">打开</button>
-        <button class="btn" data-rename="${e.id}" title="重命名" style="background:#fff;border:1px solid #e2e8f0;color:#64748b;padding:5px 8px;border-radius:7px;font-size:12px">改名</button>
-        <button class="btn" data-delete="${e.id}" title="删除" style="background:#fff;border:1px solid #fecaca;color:#dc2626;padding:5px 8px;border-radius:7px;font-size:12px">删除</button>
+      <div class="doc-actions" style="width:158px;flex-shrink:0;display:flex;gap:6px;justify-content:flex-end;align-items:center;opacity:0;transition:opacity 0.14s ease">
+        <button class="btn" data-open="${e.id}" style="background:#eff6ff;border:1px solid #bfdbfe;color:#2563eb;padding:5px 12px;border-radius:7px;font-size:12px;white-space:nowrap;flex-shrink:0">打开</button>
+        <button class="btn" data-rename="${e.id}" title="重命名" style="background:#fff;border:1px solid #e2e8f0;color:#64748b;padding:5px 8px;border-radius:7px;font-size:12px;white-space:nowrap;flex-shrink:0">改名</button>
+        <button class="btn" data-delete="${e.id}" title="删除" style="background:#fff;border:1px solid #fecaca;color:#dc2626;padding:5px 8px;border-radius:7px;font-size:12px;white-space:nowrap;flex-shrink:0">删除</button>
       </div>
     </div>
   `;
