@@ -67,6 +67,8 @@ export interface RendererOptions {
    * 拖放。position: 'child' 挂到 target 下；'before'/'after' 成为 target 的兄弟。
    */
   onDrop?: (node: FlatNode, target: FlatNode | null, position: 'child' | 'before' | 'after') => void;
+  /** 目标是否为叶子（leafOnly 类型，如测试用例）：拖放时禁止挂子指示 */
+  isLeafNode?: (id: string) => boolean;
 }
 
 /** 内置主题：默认（清爽蓝）/ 黑金（商务）/ 森绿（护眼） */
@@ -341,12 +343,18 @@ export class MindRenderer {
   }
 
   /**
-   * 拖放位置判定：目标节点上 1/4 = before 兄弟，下 1/4 = after 兄弟，中部 = child
+   * 拖放位置判定：目标节点上 1/4 = before 兄弟，下 1/4 = after 兄弟，中部 = child。
+   * isLeafTarget 为 true（leafOnly 类型，如用例）时中部也按就近边缘插为兄弟，
+   * 避免出现"可挂子节点"的假指示（松手会被 store 拒绝）。
    */
-  private dropPositionAt(n: FlatNode, sy: number): 'child' | 'before' | 'after' {
+  dropPositionAt(n: FlatNode, sy: number, isLeafTarget = false): 'child' | 'before' | 'after' {
     const r = this.nodeScreenRect(n);
     const rel = (sy - r.top) / r.height;
     if (n.depth === 0) return 'child'; // 根只接受子节点
+    if (isLeafTarget) {
+      // 叶子目标：上/下半区就近插为兄弟
+      return rel < 0.5 ? 'before' : 'after';
+    }
     if (rel < 0.3) return 'before';
     if (rel > 0.7) return 'after';
     return 'child';
@@ -477,7 +485,9 @@ export class MindRenderer {
       if (this.dragMoved) {
         const under = this.hitTest(sx, sy)?.node ?? null;
         const candidate = under && under.id !== this.dragNode.id ? under : null;
-        const pos = candidate ? this.dropPositionAt(candidate, sy) : null;
+        const pos = candidate
+          ? this.dropPositionAt(candidate, sy, this.opts.isLeafNode?.(candidate.id) ?? false)
+          : null;
         const changed = candidate?.id !== this.dropTargetId || (candidate && pos !== this.dropPosition);
         this.dropPosition = pos ?? this.dropPosition;
         this.dropTargetId = candidate?.id ?? null;

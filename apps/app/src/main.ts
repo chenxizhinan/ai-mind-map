@@ -147,6 +147,7 @@ const renderer = new MindRenderer(canvasEl, {
   },
   onToggleCollapse: (n) => toggleCollapse(n.id),
   onDrop: (node, target, position) => dropNode(node.id, target, position),
+  isLeafNode: (id) => isLeafNode(id),
   onContextMenu: (node, screen) => showCtxMenu(node, screen),
   onActivate: (n) => startEdit(n.id),
 });
@@ -205,6 +206,12 @@ function addChild(parentId: string, type = 'case', text = '新用例', edit = tr
   renderer.focusNode(r.nodeId);
   selectId(r.nodeId);
   if (edit) startEdit(r.nodeId); // XMind 式：建完即编辑
+}
+
+/** 节点是否为叶子（leafOnly 类型，如测试用例）：不允许新建子节点 */
+function isLeafNode(id: string): boolean {
+  const n = store.getNode(id);
+  return !!n && registry.get(n.type).leafOnly === true;
 }
 
 /** 智能新子节点类型：跟随父级语义（folder 下建 folder 路径层，深层叶子用例） */
@@ -381,7 +388,8 @@ window.addEventListener('keydown', (e) => {
     outdent(selId);
   } else if (e.key === 'Tab' || e.key === 'Insert') {
     e.preventDefault();
-    if (store.getNode(selId)!.type === 'case') {
+    // 叶子节点（leafOnly 类型）按 Tab 自动降级为新建同级
+    if (isLeafNode(selId)) {
       addSibling(selId);
     } else {
       addChild(selId, smartChildType(depthOf(selId)));
@@ -553,14 +561,28 @@ const ctxMenuEl = document.getElementById('ctx-menu') as HTMLDivElement;
 
 function showCtxMenu(node: FlatNode, screen: { x: number; y: number }): void {
   const isRoot = node.depth === 0;
-  const items: Array<{ label: string; kbd?: string; action?: () => void; danger?: boolean; divider?: boolean }> = [
-    { label: '新建子节点', kbd: 'Tab', action: () => (store.getNode(node.id)!.type === 'case' ? addSibling(node.id) : addChild(node.id)) },
+  const leaf = isLeafNode(node.id);
+  const items: Array<{ label: string; kbd?: string; action?: () => void; danger?: boolean; divider?: boolean; disabled?: boolean; disabledHint?: string }> = [
+    {
+      label: leaf ? '新建子节点（用例不可含子节点）' : '新建子节点',
+      kbd: 'Tab',
+      // 叶子节点按 Tab 自动降级为新建同级（XMind 行为）
+      action: () => (leaf ? addSibling(node.id) : addChild(node.id, smartChildType(depthOf(node.id)))),
+      disabled: leaf,
+      disabledHint: leaf ? '按 Tab/Enter 将自动新建同级节点' : undefined,
+    },
     { label: '新建同级节点', kbd: 'Enter', action: () => addSibling(node.id), },
     { label: '编辑文本', kbd: 'F2', action: () => startEdit(node.id) },
     { label: '设置节点颜色…', action: () => showStylePanel(node.id) },
     { label: '展开/折叠', kbd: 'Space', action: () => toggleCollapse(node.id), divider: true },
     { label: '复制子树', kbd: '⌘C', action: () => { clipboard = JSON.stringify(store.getNode(node.id)); } },
-    { label: '粘贴子树', kbd: '⌘V', action: () => pasteUnder(node.id) },
+    {
+      label: '粘贴子树',
+      kbd: '⌘V',
+      action: () => pasteUnder(node.id),
+      disabled: leaf,
+      disabledHint: leaf ? '用例节点不允许粘贴子节点' : undefined,
+    },
     { label: '转为路径节点', action: () => convertType(node.id, 'folder'), divider: true },
     { label: '转为用例节点', action: () => convertType(node.id, 'case') },
     { label: '删除子树', kbd: 'Del', action: () => deleteNode(node.id), danger: !isRoot },
@@ -569,14 +591,15 @@ function showCtxMenu(node: FlatNode, screen: { x: number; y: number }): void {
     .map((it, i) =>
       it.divider
         ? '<div class="divider"></div>'
-        : `<div class="item${it.danger ? ' danger' : ''}" data-idx="${i}">${escapeHtml(it.label)}${it.kbd ? `<span class="kbd">${it.kbd}</span>` : ''}</div>`,
+        : `<div class="item${it.danger ? ' danger' : ''}${it.disabled ? ' disabled' : ''}" data-idx="${i}" ${it.disabledHint ? `title="${escapeHtml(it.disabledHint)}"` : ''}>${escapeHtml(it.label)}${it.kbd ? `<span class="kbd">${it.kbd}</span>` : ''}</div>`,
     )
     .join('');
   ctxMenuEl.style.display = 'block';
   ctxMenuEl.style.left = `${screen.x}px`;
   ctxMenuEl.style.top = `${screen.y}px`;
   ctxMenuEl.querySelectorAll('.item').forEach((el) => {
-    el.addEventListener('click', () => {
+    el.addEventListener('click', (e) => {
+      if ((e.currentTarget as HTMLElement).classList.contains('disabled')) return;
       const idx = Number((el as HTMLElement).dataset.idx);
       items[idx]?.action?.();
       hideCtxMenu();
@@ -764,7 +787,7 @@ function renderPanel(): void {
 }
 
 function renderInfoForm(body: HTMLElement, node: MindNode): void {
-  const isCase = node.type === 'case';
+  const isCase = node.type === 'case'; // 内置用例类型显示专有表单；其他类型走通用表单
   if (isCase) {
     const p = node.props as { priority?: string; precondition?: string; steps?: string[]; expected?: string };
     body.innerHTML = `
@@ -817,19 +840,24 @@ function renderInfoForm(body: HTMLElement, node: MindNode): void {
     });
   } else {
     const note = String((node.props as { note?: string }).note ?? '');
+    const leaf = registry.get(node.type).leafOnly === true;
     body.innerHTML = `
       <div class="field">
         <label>备注</label>
         <textarea id="f-note">${escapeHtml(note)}</textarea>
       </div>
       <div class="btn-row"><button class="btn primary" id="btn-save-folder">保存</button></div>
-      <div class="field" style="margin-top:18px">
+      ${
+        leaf
+          ? `<div style="margin-top:18px;font-size:12px;color:#94a3b8">用例（叶子节点）不允许添加子节点。如需挂子内容，先右键「转为路径节点」。</div>`
+          : `<div class="field" style="margin-top:18px">
         <label>添加子节点</label>
         <div class="btn-row">
           <button class="btn" id="pa-add-folder">+ 子路径</button>
           <button class="btn" id="pa-add-case">+ 用例</button>
         </div>
-      </div>
+      </div>`
+      }
     `;
     document.getElementById('btn-save-folder')?.addEventListener('click', () => {
       snapshot();
@@ -1170,7 +1198,7 @@ document.getElementById('btn-add-case')?.addEventListener('click', () => {
     return;
   }
   const node = store.getNode(selected.id)!;
-  if (node.type === 'case') {
+  if (isLeafNode(selected.id)) {
     addSibling(selected.id);
   } else {
     addChild(selected.id);
