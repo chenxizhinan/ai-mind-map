@@ -9,7 +9,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { loadOrCreate, save } from './store.js';
 import { writeFileSync, readFileSync } from 'node:fs';
-import { encodeXmind, encodeMarkdown } from '@ai-mind-map/core';
+import { encodeXmind, encodeMarkdown, renderMethodPrompt, TEST_DESIGN_METHODS } from '@ai-mind-map/core';
 
 interface SubtreeInput {
   type: string;
@@ -284,6 +284,37 @@ export function registerTools(
       } catch (e) {
         return err(e);
       }
+    },
+  );
+
+  // ---------- 测试设计方法库（AI 生成用例的约束） ----------
+
+  server.tool(
+    'get_test_methods',
+    [
+      '获取测试用例设计方法库（各测试方向的设计方法与必查点）。',
+      '在开始设计/生成用例之前先调用一次，之后按对应方法展开每条用例。',
+      '若导图按测试维度组织（一级节点带 method 标注），返回的约束已按实际维度定制。',
+    ].join(' '),
+    {},
+    async () => {
+      // 从当前文档一级节点读维度标注：有标注 → 渲染针对性约束；无 → 全量方法
+      const dims = store()
+        .root.children.map((c) => String((c.props as { method?: string }).method ?? ''))
+        .filter(Boolean);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: [
+              renderMethodPrompt(dims),
+              '',
+              '维度 method 标注对照：',
+              ...TEST_DESIGN_METHODS.map((m) => `- ${m.key} = ${m.label}：${m.goal}`),
+            ].join('\n'),
+          },
+        ],
+      };
     },
   );
 }

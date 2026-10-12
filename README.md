@@ -70,6 +70,7 @@ Claude 可用的工具：
 | `query_tree` | 读树（按类型过滤、limit 截断，避免超大响应） |
 | `add_annotation` / `list_annotations` / `reply_annotation` / `resolve_annotation` | 评审批注闭环：人批注 → Claude 读批注 → 修订 → 回批注 |
 | `export_xmind` / `export_markdown` | 导出 .xmind（Zen 格式）/ 幕布式 Markdown 大纲 |
+| `get_test_methods` | 获取测试设计方法库（按导图维度定制）。生成用例前先调用一次，按方法展开用例 |
 
 ## 节点类型扩展
 
