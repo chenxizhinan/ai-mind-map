@@ -20,6 +20,7 @@ apps/
 ```bash
 make install   # 安装依赖
 make demo      # 启动脑图应用（固定冷门端口 47213，避开常用端口）
+make bridge    # 启动桥接服务（端口 47214）：实时协作 + AI 助手
 ```
 
 打开 http://localhost:47213，约 12k 演示节点。其他命令：`make help` 查看（`make mcp` 启动 MCP server、`make test`、`make typecheck`）。
@@ -104,8 +105,21 @@ npm run typecheck # 全 workspace 严格类型检查
 - [x] canvas 渲染器（12k 节点演示流畅；视口裁剪 + 默认折叠）
 - [x] 侧边面板（用例信息 / 批注线程）
 - [x] XMind 导入导出 + 幕布式 Markdown 互转（见下）
-- [ ] MCP 与应用的文件监听实时刷新（当前 app 用「加载 JSON」按钮导入）
-- [ ] AI 对话式生成（复用 MCP 底座）
+- [x] 桥接服务 + 文件监听实时刷新（MCP/外部改文件 → 应用 1s 内自动重载）
+- [x] AI 对话式生成（应用内 AI 助手抽屉，复用 MCP 工具底座，见下）
+
+## 桥接服务与 AI 助手
+
+`make bridge` 启动桥接服务（`packages/mcp-server/src/bridge-cli.ts`，端口 47214）后：
+
+- **实时刷新**：应用自动连接桥接服务的 SSE；MCP server / Claude 桌面侧改了
+  `--file` 指定的文档，应用 1 秒内自动重载（平移缩放视口保持不动）；应用里的
+  编辑也会防抖推回桥接服务落盘。单权威副本 + 串行队列保证不交叉写入。
+- **AI 助手**：顶栏「✦ AI 助手」打开抽屉，用自然语言生成/修订用例（如
+  「为支付模块生成 20 个用例，覆盖边界和异常流」）。AI 通过与 MCP 完全相同的
+  工具面（add_subtree / query_tree / update_node…）直接读写导图，流式输出，
+  完成后应用自动刷新。需要 `ANTHROPIC_API_KEY` 环境变量或 `ant auth login`；
+  默认模型 `claude-opus-5-5`（`--model` 可换）。
 
 ## XMind / Markdown 互转
 

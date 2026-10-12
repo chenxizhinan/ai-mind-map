@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@ai-mind-map/core": "*",
+    "@anthropic-ai/sdk": "^0.133.0",
     "@modelcontextprotocol/sdk": "^1.0.4"
   },
   "devDependencies": {

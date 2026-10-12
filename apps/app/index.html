@@ -156,6 +156,7 @@
         <button id="export-xmind">导出 XMind</button>
         <button id="export-md">导出 MD</button>
         <button id="export-png">导出 PNG</button>
+        <button id="ai-toggle" class="primary" style="background:#7c3aed;border-color:#7c3aed">✦ AI 助手</button>
         <button id="btn-expand-all">全部展开</button>
         <button id="btn-collapse-all">全部折叠</button>
         <button id="btn-add-case" class="primary">+ 用例</button>
@@ -203,6 +204,18 @@
         <button class="btn" id="batch-priority" title="批量设置优先级">优先级</button>
         <button class="btn danger" id="batch-delete" style="color:#dc2626;border-color:#fca5a5">删除</button>
         <button class="btn" id="batch-cancel">取消</button>
+      </div>
+      <div id="ctx-menu"></div>
+      <div id="ai-drawer" style="position:fixed;right:0;top:0;bottom:0;width:400px;max-width:90vw;background:#fff;border-left:1px solid #e2e8f0;box-shadow:-8px 0 30px rgba(15,23,42,0.1);z-index:200;display:none;flex-direction:column">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #e2e8f0">
+          <span style="font-weight:600;font-size:14px">✦ AI 助手</span>
+          <button id="ai-close" style="border:none;background:transparent;cursor:pointer;font-size:16px;color:#94a3b8">✕</button>
+        </div>
+        <div id="ai-log" style="flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px"></div>
+        <div style="padding:12px 16px;border-top:1px solid #e2e8f0;display:flex;gap:8px">
+          <textarea id="ai-input" placeholder="例如：为支付模块生成 20 个用例，覆盖边界和异常流" style="flex:1;min-height:44px;max-height:120px;resize:vertical;font-size:13px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-family:inherit;outline:none"></textarea>
+          <button id="ai-send" class="btn primary" style="background:#7c3aed;border-color:#7c3aed;align-self:flex-end">发送</button>
+        </div>
       </div>
       <div id="ctx-menu"></div>
     </div>

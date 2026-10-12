@@ -78,6 +78,7 @@ function saveLocal(): void {
     } catch {
       /* 存储满/禁用时静默 */
     }
+    void pushRemote(); // 桥接在线时同步给远端（内部静默失败）
   }, 800);
 }
 
@@ -1167,6 +1168,53 @@ window.addEventListener('beforeunload', () => {
   }
 });
 
+// ---------- 桥接服务（实时协作） ----------
+const BRIDGE_URL = (localStorage.getItem('ai-mind-map:bridge') ?? 'http://localhost:47214').replace(/\/$/, '');
+let lastPushAt = 0;
+
+/** 外部（MCP/AI/另一浏览器）改了文档：重拉全量并刷新视图 */
+async function pullRemote(): Promise<void> {
+  if (Date.now() - lastPushAt < 1500) return; // 自己刚推送过，忽略回声
+  try {
+    const res = await fetch(`${BRIDGE_URL}/doc`);
+    if (!res.ok) return;
+    const d = (await res.json()) as MindDocument;
+    loadDoc(d, true); // keepViewport: 平移缩放不动，只换数据
+    expandedIds = null; // 默认展开深度
+  } catch {
+    /* bridge 未启动：静默降级为本地模式 */
+  }
+}
+
+/** 启动时尝试连接 bridge 的 SSE（未启动则静默降级） */
+function connectBridge(): void {
+  try {
+    const es = new EventSource(`${BRIDGE_URL}/events`);
+    es.addEventListener('changed', () => {
+      void pullRemote();
+    });
+    es.onerror = () => {
+      /* 断线自动重连由 EventSource 内建 */
+    };
+  } catch {
+    /* bridge 未启动 */
+  }
+}
+
+/** 浏览器侧保存：写回 bridge（异步，失败静默——本地 localStorage 仍是兜底） */
+async function pushRemote(): Promise<void> {
+  lastPushAt = Date.now();
+  try {
+    await fetch(`${BRIDGE_URL}/doc`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(doc),
+    });
+  } catch {
+    /* bridge 未启动 */
+  }
+}
+
 // ---------- 启动 ----------
 const stored = loadLocal();
 if (stored) {
@@ -1200,3 +1248,118 @@ document.getElementById('theme-select')?.addEventListener('change', (e) => {
 (window as unknown as Record<string, unknown>).renderer = renderer;
 (window as unknown as Record<string, unknown>).store = () => store;
 (window as unknown as Record<string, unknown>).appState = () => ({ selected, expandedIds });
+
+// 桥接：启动连接
+connectBridge();
+
+// ---------- AI 助手抽屉 ----------
+const aiDrawer = document.getElementById('ai-drawer') as HTMLDivElement;
+const aiLog = document.getElementById('ai-log') as HTMLDivElement;
+const aiInput = document.getElementById('ai-input') as HTMLTextAreaElement;
+const aiSendBtn = document.getElementById('ai-send') as HTMLButtonElement;
+
+function toggleAiDrawer(): void {
+  const open = aiDrawer.style.display !== 'flex';
+  aiDrawer.style.display = open ? 'flex' : 'none';
+  if (open) aiInput.focus();
+}
+document.getElementById('ai-toggle')?.addEventListener('click', toggleAiDrawer);
+document.getElementById('ai-close')?.addEventListener('click', toggleAiDrawer);
+
+/** 追加一条消息气泡；返回文本容器（AI 流式填充用） */
+function addBubble(role: 'user' | 'ai' | 'sys'): HTMLElement {
+  const bubble = document.createElement('div');
+  bubble.className = `ai-bubble ${role}`;
+  const isUser = role === 'user';
+  const isAi = role === 'ai';
+  bubble.style.cssText =
+    `max-width:92%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.55;` +
+    `white-space:pre-wrap;word-break:break-word;` +
+    `align-self:${isUser ? 'flex-end' : 'flex-start'};` +
+    `background:${isUser ? '#2563eb' : isAi ? '#f5f3ff' : '#f1f5f9'};` +
+    `color:${isUser ? '#fff' : '#1e293b'}`;
+  const text = document.createElement('div');
+  text.className = 'ai-text';
+  bubble.appendChild(text);
+  aiLog.appendChild(bubble);
+  aiLog.scrollTop = aiLog.scrollHeight;
+  return text;
+}
+
+addBubble('sys').textContent = '连接 bridge 后可让 AI 直接读写当前导图（未启动 bridge 时提示 make bridge）。';
+
+async function sendAiMessage(): Promise<void> {
+  const message = aiInput.value.trim();
+  if (!message) return;
+  aiInput.value = '';
+  addBubble('user').textContent = message;
+
+  const aiText = addBubble('ai');
+  aiText.textContent = '思考中…';
+  aiSendBtn.disabled = true;
+
+  try {
+    const res = await fetch(`${BRIDGE_URL}/ai/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+    });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const j = (await res.json()) as { error?: string };
+        if (j.error) msg = j.error;
+      } catch { /* 非 JSON 错误体 */ }
+      aiText.textContent = `AI 请求失败：${msg}`;
+      return;
+    }
+    if (!res.body) {
+      aiText.textContent = 'AI 请求失败：无响应流';
+      return;
+    }
+
+    // 解析 SSE（text 流式 / done / error）
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const evLine = chunk.split('\n').find((l) => l.startsWith('event: '));
+        const dataLine = chunk.split('\n').find((l) => l.startsWith('data: '));
+        if (!evLine || !dataLine) continue;
+        const ev = evLine.slice(7);
+        const data = JSON.parse(dataLine.slice(6)) as { error?: string; toolCalls?: number };
+        if (ev === 'text') {
+          if (aiText.textContent === '思考中…') aiText.textContent = '';
+          aiText.textContent += String(data);
+          aiLog.scrollTop = aiLog.scrollHeight;
+        } else if (ev === 'done') {
+          aiText.textContent = aiText.textContent || '（完成）';
+        } else if (ev === 'error') {
+          aiText.textContent += `\n[错误] ${data.error ?? ''}`;
+        }
+      }
+    }
+    if (!aiText.textContent) aiText.textContent = '（无回复）';
+  } catch {
+    aiText.textContent = '无法连接 bridge（默认 http://localhost:47214）。启动方式：make bridge';
+  } finally {
+    aiSendBtn.disabled = false;
+    aiInput.focus();
+  }
+}
+
+aiSendBtn.addEventListener('click', () => void sendAiMessage());
+aiInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    void sendAiMessage();
+  }
+});
+
