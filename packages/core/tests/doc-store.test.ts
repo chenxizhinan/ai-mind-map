@@ -136,6 +136,25 @@ describe('DocStore', () => {
     expect(() => store.moveSubtree(a, a1)).toThrow(/itself/);
   });
 
+  it('sibling order (reorder) persists through JSON roundtrip', () => {
+    const store = makeStore();
+    const { nodeId: a } = store.addSubtree(store.root.id, { type: 'folder', text: 'A' });
+    const { nodeId: b } = store.addSubtree(store.root.id, { type: 'folder', text: 'B' });
+    const { nodeId: c } = store.addSubtree(store.root.id, { type: 'folder', text: 'C' });
+    // 下移 A（A,B,C → B,A,C）：删除自身后插到原 idx+1
+    store.moveSubtree(a, store.root.id, 1);
+    expect(store.root.children.map((x) => x.text)).toEqual(['B', 'A', 'C']);
+    // 置底 A
+    store.moveSubtree(a, store.root.id, store.root.children.length - 1);
+    expect(store.root.children.map((x) => x.text)).toEqual(['B', 'C', 'A']);
+    // 置顶 A
+    store.moveSubtree(a, store.root.id, 0);
+    expect(store.root.children.map((x) => x.text)).toEqual(['A', 'B', 'C']);
+    // 顺序写入文档 JSON（固化）
+    const json = JSON.parse(JSON.stringify(store.toJSON()));
+    expect(json.tree.children.map((x: { text: string }) => x.text)).toEqual(['A', 'B', 'C']);
+  });
+
   it('annotations attach to nodes and count open ones', () => {
     const store = makeStore();
     const { nodeId } = store.addSubtree(store.root.id, { type: 'case', text: 'c' });

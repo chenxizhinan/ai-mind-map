@@ -62,21 +62,26 @@ function blankDoc(title = '新导图'): MindDocument {
 }
 
 // ---------- 持久化 ----------
-const LS_KEY = 'ai-mind-map:doc';
-const LS_EXPANDED = 'ai-mind-map:expanded';
+const LS_KEY = 'ai-mind-map:doc';        // 旧版单文档键（仅迁移用）
+const LS_EXPANDED = 'ai-mind-map:expanded'; // 旧版键（仅迁移读）
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** 防抖写入：折叠/拖动等连续操作时不逐次序列化大文档 */
+/**
+ * 防抖写入：折叠/拖动等连续操作时不逐次序列化大文档。
+ * 多文档模式：写入当前文档槽位（persistCurrent），并按文档保存展开状态。
+ */
 function saveLocal(): void {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify(doc));
-      localStorage.setItem(LS_EXPANDED, JSON.stringify([...(expandedIds ?? [])]));
-    } catch {
-      /* 存储满/禁用时静默 */
+    persistCurrent();
+    if (currentDocId) {
+      try {
+        localStorage.setItem(LS_EXPANDED + ':' + currentDocId, JSON.stringify([...(expandedIds ?? [])]));
+      } catch {
+        /* 存储满：静默 */
+      }
     }
     void pushRemote(); // 桥接在线时同步给远端（内部静默失败）
   }, 800);
@@ -279,6 +284,40 @@ function moveNode(id: string, targetId: string | null): void {
   renderer.focusNode(id);
 }
 
+// ---------- 兄弟排序（顺序固化在文档 children 顺序里） ----------
+
+/**
+ * 在同级内移动节点位置。offset: -1=上移(前移) 1=下移(后移)；
+ * 'first'=置顶 'last'=置底。根子级与普通层级都可用。
+ * @returns 是否发生了移动
+ */
+function reorderSibling(id: string, offset: -1 | 1 | 'first' | 'last'): boolean {
+  const node = store.getNode(id);
+  const parent = store.getParent(id);
+  if (!node || !parent) return false;
+  const siblings = parent.children ?? [];
+  const idx = siblings.findIndex((s) => s.id === id);
+  if (idx === -1) return false;
+
+  let target: number;
+  if (offset === 'first') target = 0;
+  else if (offset === 'last') target = siblings.length - 1;
+  else target = idx + offset;
+
+  if (target === idx || target < 0 || target >= siblings.length) return false;
+  snapshot();
+  // 同父移动：先移除自身，再按补偿索引插入。置顶=0；置底=删除后末尾；
+  // 上移=删除后原 target 前移一位；下移=删除后原 idx+1 处即为目标位
+  let insertAt: number;
+  if (offset === 'first') insertAt = 0;
+  else if (offset === 'last') insertAt = siblings.length - 1;
+  else if (offset === -1) insertAt = Math.max(0, idx - 1);
+  else insertAt = idx; // +1：删除自身后原 idx+1 处即为目标位
+  store.moveSubtree(id, parent.id, insertAt);
+  relayout();
+  return true;
+}
+
 /**
  * 拖放落点：child=挂到 target 下；before/after=成为 target 的兄弟（插到其前/后）。
  */
@@ -416,6 +455,19 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
     e.preventDefault();
     smartNavigateLR(e.key === 'ArrowRight' ? 'in' : 'out');
+  } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    // Alt+↑/↓：同级内上移/下移（顺序固化到文档 children 顺序）
+    e.preventDefault();
+    if (reorderSibling(selId, e.key === 'ArrowUp' ? -1 : 1)) {
+      renderer.focusNode(selId);
+    }
+  } else if (e.altKey && (e.metaKey || e.ctrlKey) && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    // ⌘/Ctrl+Alt+←/→：置顶/置底
+    e.preventDefault();
+    if (reorderSibling(selId, e.key === 'ArrowLeft' ? 'first' : 'last')) {
+      renderer.focusNode(selId);
+      toast(e.key === 'ArrowLeft' ? '已移到最前' : '已移到最后', 'success');
+    }
   } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
     e.preventDefault();
     navigateUD(e.key === 'ArrowUp' ? -1 : 1);
@@ -601,6 +653,35 @@ function showCtxMenu(node: FlatNode, screen: { x: number; y: number }): void {
     },
     { label: '转为路径节点', action: () => convertType(node.id, 'folder'), divider: true },
     { label: '转为用例节点', action: () => convertType(node.id, 'case') },
+    {
+      label: '上移',
+      kbd: '⌥↑',
+      action: () => {
+        if (!reorderSibling(node.id, -1)) toast('已在最前', 'info');
+      },
+      divider: true,
+    },
+    {
+      label: '下移',
+      kbd: '⌥↓',
+      action: () => {
+        if (!reorderSibling(node.id, 1)) toast('已在最后', 'info');
+      },
+    },
+    {
+      label: '移到最前',
+      kbd: '⌘⌥←',
+      action: () => {
+        if (!reorderSibling(node.id, 'first')) toast('已在最前', 'info');
+      },
+    },
+    {
+      label: '移到最后',
+      kbd: '⌘⌥→',
+      action: () => {
+        if (!reorderSibling(node.id, 'last')) toast('已在最后', 'info');
+      },
+    },
     { label: '删除子树', kbd: 'Del', action: () => deleteNode(node.id), danger: !isRoot },
   ];
   ctxMenuEl.innerHTML = items
@@ -1368,11 +1449,13 @@ window.addEventListener('beforeunload', () => {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify(doc));
-      localStorage.setItem(LS_EXPANDED, JSON.stringify([...(expandedIds ?? [])]));
-    } catch {
-      /* ignore */
+    persistCurrent();
+    if (currentDocId) {
+      try {
+        localStorage.setItem(LS_EXPANDED + ':' + currentDocId, JSON.stringify([...(expandedIds ?? [])]));
+      } catch {
+        /* ignore */
+      }
     }
   }
 });
@@ -1424,22 +1507,286 @@ async function pushRemote(): Promise<void> {
   }
 }
 
-// ---------- 启动 ----------
-const stored = loadLocal();
-if (stored) {
+// ---------- 多文档管理 ----------
+interface DocEntry {
+  id: string;
+  title: string;
+  updatedAt: number;
+}
+
+const DOCS_INDEX_KEY = 'ai-mind-map:docs'; // 索引：[{id,title,updatedAt}]
+const DOC_PREFIX = 'ai-mind-map:doc:';      // 每文档数据键
+const LAST_DOC_KEY = 'ai-mind-map:last-doc';
+
+function loadDocsIndex(): DocEntry[] {
   try {
-    loadDoc(stored, false);
-    const rawExp = localStorage.getItem(LS_EXPANDED);
-    if (rawExp) {
+    return JSON.parse(localStorage.getItem(DOCS_INDEX_KEY) ?? '[]') as DocEntry[];
+  } catch {
+    return [];
+  }
+}
+
+function saveDocsIndex(entries: DocEntry[]): void {
+  localStorage.setItem(DOCS_INDEX_KEY, JSON.stringify(entries));
+}
+
+/** 文档保存时同步索引里的标题与时间戳 */
+function touchDocEntry(id: string, title: string): void {
+  const entries = loadDocsIndex();
+  const e = entries.find((x) => x.id === id);
+  if (e) {
+    e.title = title;
+    e.updatedAt = Date.now();
+    saveDocsIndex(entries);
+  }
+}
+
+function deleteDoc(id: string): void {
+  localStorage.removeItem(DOC_PREFIX + id);
+  saveDocsIndex(loadDocsIndex().filter((x) => x.id !== id));
+}
+
+// ---------- 启动 ----------
+// 多文档：读 last-doc 指向的文档；无任何文档时创建演示文档
+let currentDocId: string | null = localStorage.getItem(LAST_DOC_KEY);
+
+/** 把当前 doc/store 的内容保存到其文档槽位并更新索引 */
+function persistCurrent(): void {
+  if (!currentDocId) return;
+  try {
+    localStorage.setItem(DOC_PREFIX + currentDocId, JSON.stringify(doc));
+    touchDocEntry(currentDocId, store.document.meta.title || '未命名导图');
+  } catch {
+    /* 存储满：静默 */
+  }
+}
+
+/** 打开一个文档（从其槽位加载，失效则新建） */
+function openDoc(id: string): void {
+  const raw = localStorage.getItem(DOC_PREFIX + id);
+  let d: MindDocument | null = null;
+  if (raw) {
+    try {
+      d = JSON.parse(raw) as MindDocument;
+    } catch {
+      d = null;
+    }
+  }
+  currentDocId = id;
+  localStorage.setItem(LAST_DOC_KEY, id);
+  loadDoc(d ?? makeDemo(), false);
+  // 每文档独立的展开状态
+  const rawExp = localStorage.getItem(LS_EXPANDED + ':' + id);
+  if (rawExp) {
+    try {
       const arr = JSON.parse(rawExp) as string[];
       expandedIds = arr.length ? new Set(arr) : null;
       relayout();
+    } catch {
+      expandedIds = null;
     }
-  } catch {
-    loadDoc(makeDemo(), false);
   }
+}
+
+/** 新建文档并打开 */
+function createDoc(title?: string): string {
+  const id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const d = blankDoc(title ?? '未命名导图');
+  localStorage.setItem(DOC_PREFIX + id, JSON.stringify(d));
+  const entries = loadDocsIndex();
+  entries.unshift({ id, title: d.meta.title, updatedAt: Date.now() });
+  saveDocsIndex(entries);
+  localStorage.setItem(LAST_DOC_KEY, id);
+  showHome(false); // 先关首页再装载，进入编辑器
+  openDoc(id);
+  return id;
+}
+
+/** 首页项目卡片 */
+function cardHtml(e: DocEntry): string {
+  const initial = (e.title || '?').slice(0, 1);
+  const when = e.updatedAt ? new Date(e.updatedAt).toLocaleString('zh-CN', { hour12: false }) : '';
+  return `
+    <div class="doc-card" data-id="${e.id}" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <div style="width:34px;height:34px;border-radius:9px;background:#2563eb;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">${escapeHtml(initial)}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.title)}</div>
+          <div style="font-size:11px;color:#94a3b8">${when || '新建'}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn" data-open="${e.id}" style="flex:1">打开</button>
+        <button class="btn" data-rename="${e.id}" title="重命名" style="font-size:12px;padding:4px 8px">改名</button>
+        <button class="btn" data-delete="${e.id}" title="删除" style="font-size:12px;padding:4px 8px;color:#dc2626;border-color:#fca5a5">删除</button>
+      </div>
+    </div>
+  `;
+}
+
+/** 渲染首页项目卡片网格 */
+function renderHome(): void {
+  const grid = document.getElementById('home-grid') as HTMLDivElement;
+  const entries = loadDocsIndex().sort((a, b) => b.updatedAt - a.updatedAt);
+  grid.innerHTML =
+    entries.length === 0
+      ? '<div style="color:#94a3b8;font-size:13px;padding:40px 0;grid-column:1/-1;text-align:center">还没有导图，点击「新建导图」开始</div>'
+      : entries.map((e) => cardHtml(e)).join('');
+  grid.querySelectorAll('[data-open]').forEach((el) =>
+    el.addEventListener('click', () => {
+      showHome(false);
+      openDoc((el as HTMLElement).dataset.open!);
+    }),
+  );
+  grid.querySelectorAll('[data-rename]').forEach((el) =>
+    el.addEventListener('click', () => {
+      const id = (el as HTMLElement).dataset.rename!;
+      const entries2 = loadDocsIndex();
+      const cur = entries2.find((x) => x.id === id);
+      const next = prompt('重命名导图', cur?.title ?? '')?.trim();
+      if (next) {
+        // 同步改文档 meta.title
+        try {
+          const raw = localStorage.getItem(DOC_PREFIX + id);
+          if (raw) {
+            const d = JSON.parse(raw) as MindDocument;
+            d.meta.title = next;
+            localStorage.setItem(DOC_PREFIX + id, JSON.stringify(d));
+          }
+        } catch { /* ignore */ }
+        cur!.title = next;
+        saveDocsIndex(entries2);
+        renderHome();
+      }
+    }),
+  );
+  grid.querySelectorAll('[data-delete]').forEach((el) =>
+    el.addEventListener('click', () => {
+      const id = (el as HTMLElement).dataset.delete!;
+      const cur = loadDocsIndex().find((x) => x.id === id);
+      if (confirm(`删除「${cur?.title ?? '未命名'}」？删除后不可恢复。`)) {
+        deleteDoc(id);
+        renderHome();
+      }
+    }),
+  );
+}
+
+/** 显示/隐藏首页；离开编辑器前先保存当前文档 */
+function showHome(show: boolean): void {
+  const home = document.getElementById('home-view') as HTMLDivElement;
+  home.style.display = show ? 'block' : 'none';
+  if (!show) return;
+  persistCurrent();
+  renderHome();
+}
+
+// 首页按钮
+document.getElementById('home-new')?.addEventListener('click', () => {
+  const title = prompt('新导图名称', '未命名导图');
+  if (title === null) return;
+  createDoc(title.trim() || undefined);
+});
+document.getElementById('home-import')?.addEventListener('click', () => {
+  // 复用导入 JSON 通道：导入后存为新文档
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,.xmind,.md,.markdown,.txt';
+  input.onchange = () => {
+    const f = input.files?.[0];
+    if (!f) return;
+    f.arrayBuffer().then((buf) => {
+      try {
+        const name = f.name;
+        let tree;
+        if (name.endsWith('.xmind')) {
+          tree = decodeXmind(new Uint8Array(buf), registry).tree;
+        } else if (/\.(md|markdown|txt)$/.test(name)) {
+          tree = decodeMarkdown(new TextDecoder().decode(buf)).tree;
+        } else {
+          loadDoc(JSON.parse(new TextDecoder().decode(buf)));
+          // loadDoc 已把内容装进 store；打包成新文档
+          const id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+          localStorage.setItem(DOC_PREFIX + id, JSON.stringify(store.toJSON()));
+          const entries = loadDocsIndex();
+          entries.unshift({ id, title: store.document.meta.title, updatedAt: Date.now() });
+          saveDocsIndex(entries);
+          localStorage.setItem(LAST_DOC_KEY, id);
+          showHome(false);
+          toast('已导入为新文档', 'success');
+          return;
+        }
+        const id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+        const d: MindDocument = {
+          version: 1,
+          meta: { title: tree.text, updatedAt: new Date().toISOString() },
+          tree,
+          annotations: [],
+        };
+        localStorage.setItem(DOC_PREFIX + id, JSON.stringify(d));
+        const entries = loadDocsIndex();
+        entries.unshift({ id, title: d.meta.title, updatedAt: Date.now() });
+        saveDocsIndex(entries);
+        localStorage.setItem(LAST_DOC_KEY, id);
+        showHome(false);
+        openDoc(id);
+        toast('已导入为新文档', 'success');
+      } catch (e) {
+        toast(`导入失败：${(e as Error).message}`, 'error');
+      }
+    });
+  };
+  input.click();
+});
+
+// 顶部 logo 点击返回首页
+document.getElementById('home-btn')?.addEventListener('click', () => {
+  showHome(true);
+});
+
+// ---------- 启动装载 ----------
+// 旧版单文档键迁移为多文档槽位（一次性）
+(function migrateLegacyDoc(): void {
+  const legacy = loadLocal();
+  if (!legacy) return;
+  const id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  try {
+    localStorage.setItem(DOC_PREFIX + id, JSON.stringify(legacy));
+    const entries = loadDocsIndex();
+    entries.unshift({ id, title: legacy.meta.title || '未命名导图', updatedAt: Date.now() });
+    saveDocsIndex(entries);
+    localStorage.setItem(LAST_DOC_KEY, id);
+  } catch {
+    /* ignore */
+  }
+  localStorage.removeItem(LS_KEY);
+  localStorage.removeItem(LS_EXPANDED);
+})();
+
+if (!loadDocsIndex().length) {
+  // 首次使用：预置演示文档
+  const id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const d = makeDemo();
+  try {
+    localStorage.setItem(DOC_PREFIX + id, JSON.stringify(d));
+    const entries = loadDocsIndex();
+    entries.unshift({ id, title: d.meta.title, updatedAt: Date.now() });
+    saveDocsIndex(entries);
+    localStorage.setItem(LAST_DOC_KEY, id);
+  } catch {
+    /* ignore */
+  }
+}
+
+// 打开上次编辑的文档；否则显示首页
+const lastId = localStorage.getItem(LAST_DOC_KEY);
+if (lastId && localStorage.getItem(DOC_PREFIX + lastId)) {
+  openDoc(lastId);
+  showHome(false);
 } else {
-  loadDoc(makeDemo(), false);
+  // 先装载一个空文档占位（renderer 需要），再弹首页
+  loadDoc(blankDoc('未命名导图'), false);
+  showHome(true);
 }
 updateZoomPct();
 

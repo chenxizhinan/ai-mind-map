@@ -141,11 +141,21 @@
         display: flex; gap: 14px; flex-wrap: wrap;
       }
     </style>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='2' y='9.5' width='6' height='5' rx='1' fill='%231e293b'/%3E%3Crect x='16' y='3' width='6' height='4.6' rx='1' fill='%232563eb'/%3E%3Crect x='16' y='10.2' width='6' height='4.6' rx='1' fill='%230891b2'/%3E%3Crect x='16' y='17.4' width='4.6' height='4.6' rx='1' fill='%2316a34a'/%3E%3C/svg%3E" />
   </head>
   <body>
     <div id="app">
       <header>
-        <span class="title" id="doc-title">ai-mind-map</span>
+        <button id="home-btn" title="返回项目列表" style="display:flex;align-items:center;gap:7px;border:none;background:transparent;cursor:pointer;padding:2px 6px;border-radius:8px">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-label="ai-mind-map logo">
+            <rect x="2" y="9.5" width="6" height="5" rx="1.6" fill="#1e293b"/>
+            <rect x="16" y="3" width="6" height="4.6" rx="1.5" fill="#2563eb"/>
+            <rect x="16" y="10.2" width="6" height="4.6" rx="1.5" fill="#0891b2"/>
+            <rect x="16" y="17.4" width="4.6" height="4.6" rx="1.5" fill="#16a34a"/>
+            <path d="M8 12 H12 M12 12 V5.3 H16 M12 12 V12.5 H16 M12 12 V19.7 H18.7" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+          </svg>
+          <span class="title" id="doc-title">ai-mind-map</span>
+        </button>
         <span class="stats" id="stats"></span>
         <span class="spacer"></span>
         <button id="btn-undo" title="撤销 (⌘Z)">↩ 撤销</button>
@@ -180,6 +190,26 @@
         <button id="btn-collapse-all">全部折叠</button>
         <button id="btn-add-case" class="primary">+ 用例</button>
       </header>
+      <div id="home-view" style="display:none;position:absolute;inset:0;background:#f6f7fb;z-index:500;overflow-y:auto">
+        <div style="max-width:1080px;margin:0 auto;padding:48px 32px">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none">
+              <rect x="2" y="9.5" width="6" height="5" rx="1.6" fill="#1e293b"/>
+              <rect x="16" y="3" width="6" height="4.6" rx="1.5" fill="#2563eb"/>
+              <rect x="16" y="10.2" width="6" height="4.6" rx="1.5" fill="#0891b2"/>
+              <rect x="16" y="17.4" width="4.6" height="4.6" rx="1.5" fill="#16a34a"/>
+              <path d="M8 12 H12 M12 12 V5.3 H16 M12 12 V12.5 H16 M12 12 V19.7 H18.7" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+            </svg>
+            <span style="font-size:22px;font-weight:700;color:#1e 293b">ai-mind-map</span>
+          </div>
+          <div style="color:#94a3b8;font-size:13px;margin-bottom:30px">AI 原生测试用例脑图 · 本地项目列表</div>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:22px">
+            <button class="btn primary" id="home-new">＋ 新建导图</button>
+            <button class="btn" id="home-import">导入文件…</button>
+        </div>
+          <div id="home-grid" style="display:grid;display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px"></div>
+        </div>
+      </div>
       <main>
         <div id="canvas-wrap">
           <canvas id="canvas"></canvas>
