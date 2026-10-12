@@ -1422,8 +1422,9 @@ function fitView(): void {
 
 // ---------- 文档装载 ----------
 function loadDoc(d: MindDocument, keepViewport = false): void {
-  doc = d;
   store = DocStore.fromJSON(registry, d);
+  // doc 引用 store 内部对象：之后所有编辑都反映在 doc 上，persistCurrent/saveLocal 才不会写旧快照
+  doc = store.toJSON();
   expandedIds = null;
   selected = null;
   renderPanel();
@@ -1602,36 +1603,85 @@ function createDoc(title?: string): string {
   return id;
 }
 
-/** 首页项目卡片 */
+/** 首页项目卡片（深色商务风） */
 function cardHtml(e: DocEntry): string {
   const initial = (e.title || '?').slice(0, 1);
-  const when = e.updatedAt ? new Date(e.updatedAt).toLocaleString('zh-CN', { hour12: false }) : '';
+  const when = e.updatedAt
+    ? new Date(e.updatedAt).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : '';
+  // 每张卡按标题哈希取分支色，避免满屏同色
+  const hues = ['#3b82f6', '#22d3ee', '#4ade80', '#f59e0b', '#f472b6', '#a78bfa', '#34d399'];
+  const accent = hues[(e.title || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0) % hues.length]!;
+  const nodeCount = docNodeCount(e.id);
   return `
-    <div class="doc-card" data-id="${e.id}" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <div style="width:34px;height:34px;border-radius:9px;background:#2563eb;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">${escapeHtml(initial)}</div>
+    <div class="doc-card" data-id="${e.id}" style="position:relative;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px;cursor:pointer;box-shadow:0 1px 3px rgba(15,23,42,0.04);transition:transform 0.16s ease,box-shadow 0.16s ease,border-color 0.16s ease"
+      onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 10px 28px rgba(15,23,42,0.10)';this.style.borderColor='#bfdbfe'"
+      onmouseout="this.style.transform='';this.style.boxShadow='0 1px 3px rgba(15,23,42,0.04)';this.style.borderColor='#e2e8f0'">
+      <div style="position:absolute;top:16px;right:16px;width:8px;height:8px;border-radius:50%;background:${accent}"></div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <div style="width:40px;height:40px;border-radius:11px;background:linear-gradient(135deg,${accent},${accent}cc);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px;flex-shrink:0">${escapeHtml(initial)}</div>
         <div style="flex:1;min-width:0">
-          <div style="font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.title)}</div>
-          <div style="font-size:11px;color:#94a3b8">${when || '新建'}</div>
+          <div style="font-size:14.5px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.title)}</div>
+          <div style="font-size:11px;color:#94a3b8;margin-top:2px">${when || '新建'}</div>
         </div>
       </div>
-      <div style="display:flex;gap:6px">
-        <button class="btn" data-open="${e.id}" style="flex:1">打开</button>
-        <button class="btn" data-rename="${e.id}" title="重命名" style="font-size:12px;padding:4px 8px">改名</button>
-        <button class="btn" data-delete="${e.id}" title="删除" style="font-size:12px;padding:4px 8px;color:#dc2626;border-color:#fca5a5">删除</button>
+      <div style="display:flex;align-items:center;gap:14px;font-size:11.5px;color:#64748b;margin-bottom:12px">
+        <span>🗂 ${nodeCount} 节点</span>
+        <span style="color:${accent}">●</span>
+        <span>${escapeHtml(e.title.length > 1 ? e.title.slice(1, 9) : '项目')}</span>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" data-open="${e.id}" style="flex:1;background:#eff6ff;border:1px solid #bfdbfe;color:#2563eb;padding:6px 10px;border-radius:8px;font-size:12.5px">打开</button>
+        <button class="btn" data-rename="${e.id}" title="重命名" style="background:#fff;border:1px solid #e2e8f0;color:#64748b;padding:6px 9px;border-radius:8px;font-size:12px">改名</button>
+        <button class="btn" data-delete="${e.id}" title="删除" style="background:#fff;border:1px solid #fecaca;color:#dc2626;padding:6px 9px;border-radius:8px;font-size:12px">删除</button>
       </div>
     </div>
   `;
+}
+
+/** 文档节点数（读槽位 JSON 粗算，卡片展示用） */
+function docNodeCount(id: string): number {
+  try {
+    const raw = localStorage.getItem(DOC_PREFIX + id);
+    if (!raw) return 0;
+    const d = JSON.parse(raw) as MindDocument;
+    const count = (n: { children?: unknown[] }): number =>
+      1 + (n.children ?? []).reduce((acc: number, c) => acc + count(c as { children?: unknown[] }), 0);
+    return count(d.tree) - 1; // 不含根
+  } catch {
+    return 0;
+  }
 }
 
 /** 渲染首页项目卡片网格 */
 function renderHome(): void {
   const grid = document.getElementById('home-grid') as HTMLDivElement;
   const entries = loadDocsIndex().sort((a, b) => b.updatedAt - a.updatedAt);
+  // 顶栏统计：项目数 / 总节点数
+  const statsEl = document.getElementById('home-stats');
+  if (statsEl) {
+    const total = entries.reduce((acc, e) => acc + docNodeCount(e.id), 0);
+    statsEl.innerHTML = `
+      <span><b style="color:#1e293b">${entries.length}</b> 个项目</span>
+      <span><b style="color:#1e293b">${total.toLocaleString()}</b> 个节点</span>
+    `;
+  }
   grid.innerHTML =
     entries.length === 0
-      ? '<div style="color:#94a3b8;font-size:13px;padding:40px 0;grid-column:1/-1;text-align:center">还没有导图，点击「新建导图」开始</div>'
+      ? `<div style="grid-column:1/-1;text-align:center;padding:72px 0;border:1px dashed #cbd5e1;border-radius:14px;background:#fbfdff">
+           <div style="font-size:34px;margin-bottom:10px">🗺</div>
+           <div style="color:#475569;font-size:14px;margin-bottom:6px">还没有导图</div>
+           <div style="color:#94a3b8;font-size:12.5px">点击右上角「＋ 新建导图」开始，或导入现有文件</div>
+         </div>`
       : entries.map((e) => cardHtml(e)).join('');
+  // 卡片整体可点（打开）；按钮冒泡已由 data-* 分发处理
+  grid.querySelectorAll('.doc-card').forEach((el) =>
+    el.addEventListener('click', (ev) => {
+      if ((ev.target as HTMLElement).closest('button')) return; // 按钮各自处理
+      showHome(false);
+      openDoc((el as HTMLElement).dataset.id!);
+    }),
+  );
   grid.querySelectorAll('[data-open]').forEach((el) =>
     el.addEventListener('click', () => {
       showHome(false);
