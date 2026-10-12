@@ -108,6 +108,56 @@ export const TEST_DESIGN_METHODS: TestDesignMethod[] = [
     ],
     checkpoints: ['核心流程全矩阵可走通', '样式不错位', '旧数据可迁移'],
   },
+  {
+    key: 'api',
+    label: '接口测试',
+    goal: '验证 API 的契约、参数校验与状态码语义（前后端分离项目的重心）',
+    methods: [
+      '契约校验：请求/响应字段逐个验证类型、必填、默认值',
+      '参数组合：必填缺失、类型错误、超长、特殊字符、枚举外值',
+      '状态码语义：2xx/4xx/5xx 与业务错误码一一对应',
+      '幂等性：同一请求重复提交的结果一致（PUT/DELETE/支付类 POST）',
+      '版本兼容：旧版本客户端调用新接口的向后兼容',
+    ],
+    checkpoints: ['错误码表齐全', '分页边界', '批量上限', '幂等', '响应时间'],
+  },
+  {
+    key: 'data',
+    label: '数据与持久化测试',
+    goal: '验证数据写入、读取、一致性、并发与迁移的正确性',
+    methods: [
+      'CRUD 全路径：增删改查逐个验证落库结果',
+      '并发写：同一记录并发更新（乐观锁/悲观锁行为）',
+      '事务边界：中途失败时的回滚完整性',
+      '数据迁移：旧结构 → 新结构的字段映射与损耗',
+      '时区与编码：跨时区时间存储、emoji/多字节字符',
+    ],
+    checkpoints: ['无脏数据', '唯一约束生效', '软删不出现于查询', '迁移可回滚'],
+  },
+  {
+    key: 'ui',
+    label: '前端交互测试',
+    goal: '验证界面交互、状态反馈与用户体验细节',
+    methods: [
+      '控件状态：默认值/禁用态/加载态/空态/错误态五态齐全',
+      '交互序列：快速重复点击、输入中途切换、返回后状态保持',
+      '表单校验：失焦即校验、错误定位、提交禁用防重复',
+      '文案与展示：超长截断、多语言占位、数字/日期本地化格式',
+    ],
+    checkpoints: ['加载与空态', '错误就近提示', '防重复提交', '键盘可达'],
+  },
+  {
+    key: 'workflow',
+    label: '业务流程测试',
+    goal: '验证跨模块、跨角色的端到端业务流（订单/审批/状态机类）',
+    methods: [
+      '状态机遍历：合法迁移逐条走，非法迁移逐条拒',
+      '角色路径：每个角色 × 每个状态的行为矩阵',
+      '端到端串联：从触发到终态的全链路（含通知/对账等旁路）',
+      '逆向流程：取消/退回/撤回对已产生数据的影响',
+    ],
+    checkpoints: ['终态可达', '非法迁移被拒', '旁路数据一致', '逆向可回退'],
+  },
 ];
 
 /** 按方向 key 找方法（找不到返回 undefined） */
@@ -155,6 +205,40 @@ const TEST_DIMENSIONS: TemplateNode[] = [
   },
 ];
 
+/** 接口测试模板的一级维度 */
+const API_DIMENSIONS: TemplateNode[] = [
+  {
+    type: 'folder',
+    text: '契约与参数校验',
+    props: { method: 'api' },
+    children: [{ type: 'case', text: '示例：必填参数缺失返回 400', props: { priority: 'P0' } }],
+  },
+  {
+    type: 'folder',
+    text: '状态码与错误码',
+    props: { method: 'api' },
+    children: [{ type: 'case', text: '示例：资源不存在返回 404 与业务码', props: { priority: 'P0' } }],
+  },
+  {
+    type: 'folder',
+    text: '鉴权与越权',
+    props: { method: 'security' },
+    children: [{ type: 'case', text: '示例：无 token 访问返回 401', props: { priority: 'P0' } }],
+  },
+  {
+    type: 'folder',
+    text: '幂等与并发',
+    props: { method: 'data' },
+    children: [{ type: 'case', text: '示例：重复提交仅生效一次', props: { priority: 'P1' } }],
+  },
+  {
+    type: 'folder',
+    text: '性能基线',
+    props: { method: 'performance' },
+    children: [{ type: 'case', text: '示例：单接口 P95 < 200ms', props: { priority: 'P2' } }],
+  },
+];
+
 /** 内置模板列表 */
 export const BUILTIN_TEMPLATES: MindTemplate[] = [
   {
@@ -170,6 +254,13 @@ export const BUILTIN_TEMPLATES: MindTemplate[] = [
     description: '按 6 大测试维度组织：功能/边界/异常/安全/性能/兼容性，每个维度标注了设计方法，AI 生成用例时自动遵循',
     tags: ['测试', '推荐'],
     root: { type: 'folder', text: '根节点', children: TEST_DIMENSIONS },
+  },
+  {
+    id: 'api-test',
+    name: '接口测试模板',
+    description: '面向前后端分离项目：契约/状态码/鉴权/幂等/性能基线，配合接口设计方法约束 AI 生成',
+    tags: ['接口'],
+    root: { type: 'folder', text: '根节点', children: API_DIMENSIONS },
   },
 ];
 
@@ -206,6 +297,7 @@ export function renderMethodPrompt(dimensions: string[]): string {
     );
   }
   parts.push('每条用例 props 带 priority（P0-P3）；能写 steps/expected 的写全。');
+  parts.push('add_subtree 时用例挂在对应维度的 folder 节点下（query_tree 找到带 method 标注的一级节点，其 id 即 parentId）。');
   return parts.join('\n');
 }
 

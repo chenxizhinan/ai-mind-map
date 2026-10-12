@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BUILTIN_TEMPLATES,
+  TEST_DESIGN_METHODS,
   buildTemplateDoc,
   findTemplate,
   renderMethodPrompt,
@@ -42,5 +43,24 @@ describe('templates', () => {
   it('buildTemplateDoc 未知模板 id 回退空白', () => {
     const d = buildTemplateDoc('nope', 'x');
     expect(d.tree.children).toHaveLength(0);
+  });
+
+  it('方法库含 10 个方向，含接口/数据/前端/流程细分', () => {
+    const keys = TEST_DESIGN_METHODS.map((m) => m.key);
+    expect(keys).toHaveLength(10);
+    for (const k of ['api', 'data', 'ui', 'workflow']) {
+      expect(keys).toContain(k);
+    }
+  });
+
+  it('接口测试模板：维度标注混排 api/security/data/performance', () => {
+    const r = makeRegistry();
+    const s = DocStore.fromJSON(r, buildTemplateDoc('api-test', '订单 API'));
+    const dims = s.root.children.map((c) => String((c.props as { method?: string }).method));
+    expect(dims).toEqual(['api', 'api', 'security', 'data', 'performance']);
+    const prompt = renderMethodPrompt(dims);
+    expect(prompt).toContain('【接口测试】');
+    expect(prompt).toContain('【安全测试】');
+    expect(prompt).toContain('幂等');
   });
 });
