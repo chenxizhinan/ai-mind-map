@@ -1603,37 +1603,30 @@ function createDoc(title?: string): string {
   return id;
 }
 
-/** 首页项目卡片（深色商务风） */
+/** 首页文件列表行（文件名 + 行内操作） */
 function cardHtml(e: DocEntry): string {
   const initial = (e.title || '?').slice(0, 1);
   const when = e.updatedAt
     ? new Date(e.updatedAt).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-    : '';
-  // 每张卡按标题哈希取分支色，避免满屏同色
+    : '—';
   const hues = ['#3b82f6', '#22d3ee', '#4ade80', '#f59e0b', '#f472b6', '#a78bfa', '#34d399'];
   const accent = hues[(e.title || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0) % hues.length]!;
   const nodeCount = docNodeCount(e.id);
   return `
-    <div class="doc-card" data-id="${e.id}" style="position:relative;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px;cursor:pointer;box-shadow:0 1px 3px rgba(15,23,42,0.04);transition:transform 0.16s ease,box-shadow 0.16s ease,border-color 0.16s ease"
-      onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 10px 28px rgba(15,23,42,0.10)';this.style.borderColor='#bfdbfe'"
-      onmouseout="this.style.transform='';this.style.boxShadow='0 1px 3px rgba(15,23,42,0.04)';this.style.borderColor='#e2e8f0'">
-      <div style="position:absolute;top:16px;right:16px;width:8px;height:8px;border-radius:50%;background:${accent}"></div>
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
-        <div style="width:40px;height:40px;border-radius:11px;background:linear-gradient(135deg,${accent},${accent}cc);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px;flex-shrink:0">${escapeHtml(initial)}</div>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:14.5px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.title)}</div>
-          <div style="font-size:11px;color:#94a3b8;margin-top:2px">${when || '新建'}</div>
-        </div>
+    <div class="doc-row" data-id="${e.id}" style="display:flex;align-items:center;gap:14px;padding:13px 18px;background:#fff;border-bottom:1px solid #eef2f7;cursor:pointer;transition:background 0.14s ease"
+      onmouseover="this.style.background='#f8faff';this.querySelector('.doc-actions').style.opacity='1'"
+      onmouseout="this.style.background='#fff';this.querySelector('.doc-actions').style.opacity='0'">
+      <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,${accent},${accent}cc);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;flex-shrink:0">${escapeHtml(initial)}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.title)}</div>
+        <div style="font-size:11px;color:#94a3b8;margin-top:1px">测试用例导图</div>
       </div>
-      <div style="display:flex;align-items:center;gap:14px;font-size:11.5px;color:#64748b;margin-bottom:12px">
-        <span>🗂 ${nodeCount} 节点</span>
-        <span style="color:${accent}">●</span>
-        <span>${escapeHtml(e.title.length > 1 ? e.title.slice(1, 9) : '项目')}</span>
-      </div>
-      <div style="display:flex;gap:8px">
-        <button class="btn" data-open="${e.id}" style="flex:1;background:#eff6ff;border:1px solid #bfdbfe;color:#2563eb;padding:6px 10px;border-radius:8px;font-size:12.5px">打开</button>
-        <button class="btn" data-rename="${e.id}" title="重命名" style="background:#fff;border:1px solid #e2e8f0;color:#64748b;padding:6px 9px;border-radius:8px;font-size:12px">改名</button>
-        <button class="btn" data-delete="${e.id}" title="删除" style="background:#fff;border:1px solid #fecaca;color:#dc2626;padding:6px 9px;border-radius:8px;font-size:12px">删除</button>
+      <span style="width:110px;font-size:12.5px;color:#64748b">${nodeCount.toLocaleString()} 节点</span>
+      <span style="width:150px;font-size:12px;color:#94a3b8">${when}</span>
+      <div class="doc-actions" style="width:132px;display:flex;gap:6px;justify-content:flex-end;opacity:0;transition:opacity 0.14s ease">
+        <button class="btn" data-open="${e.id}" style="background:#eff6ff;border:1px solid #bfdbfe;color:#2563eb;padding:5px 12px;border-radius:7px;font-size:12px">打开</button>
+        <button class="btn" data-rename="${e.id}" title="重命名" style="background:#fff;border:1px solid #e2e8f0;color:#64748b;padding:5px 8px;border-radius:7px;font-size:12px">改名</button>
+        <button class="btn" data-delete="${e.id}" title="删除" style="background:#fff;border:1px solid #fecaca;color:#dc2626;padding:5px 8px;border-radius:7px;font-size:12px">删除</button>
       </div>
     </div>
   `;
@@ -1666,16 +1659,19 @@ function renderHome(): void {
       <span><b style="color:#1e293b">${total.toLocaleString()}</b> 个节点</span>
     `;
   }
+  grid.style.borderRadius = entries.length ? '12px' : '0';
+  grid.style.overflow = entries.length ? 'hidden' : 'visible';
+  grid.style.border = entries.length ? '1px solid #e8edf3' : 'none';
   grid.innerHTML =
     entries.length === 0
-      ? `<div style="grid-column:1/-1;text-align:center;padding:72px 0;border:1px dashed #cbd5e1;border-radius:14px;background:#fbfdff">
+      ? `<div style="text-align:center;padding:72px 0;border:1px dashed #cbd5e1;border-radius:14px;background:#fbfdff;margin-top:14px">
            <div style="font-size:34px;margin-bottom:10px">🗺</div>
            <div style="color:#475569;font-size:14px;margin-bottom:6px">还没有导图</div>
            <div style="color:#94a3b8;font-size:12.5px">点击右上角「＋ 新建导图」开始，或导入现有文件</div>
          </div>`
       : entries.map((e) => cardHtml(e)).join('');
   // 卡片整体可点（打开）；按钮冒泡已由 data-* 分发处理
-  grid.querySelectorAll('.doc-card').forEach((el) =>
+  grid.querySelectorAll('.doc-row').forEach((el) =>
     el.addEventListener('click', (ev) => {
       if ((ev.target as HTMLElement).closest('button')) return; // 按钮各自处理
       showHome(false);
