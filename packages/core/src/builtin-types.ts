@@ -20,40 +20,52 @@ export interface CaseProps extends Record<string, unknown> {
 
 const PRIORITIES = new Set(['P0', 'P1', 'P2', 'P3']);
 
+/**
+ * 通用样式字段：不属于业务语义，由 UI（样式面板）直接写入、渲染层读取。
+ * normalizeProps 只负责业务字段校验，样式字段在此统一透传，
+ * 避免每个自定义类型都要记得处理它们。
+ */
+function passVisualStyle<T extends Record<string, unknown>>(p: Record<string, unknown>, out: T): T {
+  const outRec = out as Record<string, unknown>;
+  if (typeof p.color === 'string' && p.color) outRec.color = p.color;
+  else delete outRec.color;
+  if (typeof p.icon === 'string' && p.icon) outRec.icon = p.icon;
+  else delete outRec.icon;
+  return out;
+}
+
 export const folderType: NodeType<FolderProps> = {
   name: 'folder',
   label: '模块/路径',
-  icon: 'square',
   role: 'container',
   normalizeProps(input) {
-    const p = (input ?? {}) as Partial<FolderProps>;
-    return {
+    const p = (input ?? {}) as Partial<FolderProps> & Record<string, unknown>;
+    return passVisualStyle(p, {
       note: typeof p.note === 'string' ? p.note : undefined,
-    };
+    });
   },
 };
 
 export const caseType: NodeType<CaseProps> = {
   name: 'case',
   label: '测试用例',
-  icon: 'dot',
   role: 'leaf',
   leafOnly: true,
   normalizeProps(input) {
-    const p = (input ?? {}) as Partial<CaseProps>;
+    const p = (input ?? {}) as Partial<CaseProps> & Record<string, unknown>;
     if (p.priority !== undefined && !PRIORITIES.has(p.priority)) {
       throw new Error(`priority must be one of P0-P3, got "${p.priority}"`);
     }
     if (p.steps !== undefined && !Array.isArray(p.steps)) {
       throw new Error('steps must be an array of strings');
     }
-    return {
+    return passVisualStyle(p, {
       priority: p.priority,
       precondition: typeof p.precondition === 'string' ? p.precondition : undefined,
       steps: Array.isArray(p.steps) ? p.steps.map(String) : undefined,
       expected: typeof p.expected === 'string' ? p.expected : undefined,
       tags: Array.isArray(p.tags) ? p.tags.map(String) : undefined,
-    };
+    });
   },
   describe(props) {
     const p = (props ?? {}) as Partial<CaseProps>;

@@ -20,6 +20,8 @@ export interface Theme {
   level2Fill: string;
   level2Text: string;
   leafFill: string;
+  /** 叶子节点（用例等）的柔和底色，与容器白底区分 */
+  leafSoftFill: string;
   leafStroke: string;
   leafText: string;
   linkBaseWidth: number;
@@ -43,6 +45,7 @@ export const defaultTheme: Theme = {
   level2Fill: '#ffffff',
   level2Text: '#1e293b',
   leafFill: '#ffffff',
+  leafSoftFill: '#f8fafc',
   leafStroke: '#e2e8f0',
   leafText: '#1e293b',
   linkBaseWidth: 3.5,
@@ -69,6 +72,8 @@ export interface RendererOptions {
   onDrop?: (node: FlatNode, target: FlatNode | null, position: 'child' | 'before' | 'after') => void;
   /** 目标是否为叶子（leafOnly 类型，如测试用例）：拖放时禁止挂子指示 */
   isLeafNode?: (id: string) => boolean;
+  /** 目标是否为容器（有 role: 'container' 的类型）：容器节点用白底，叶子用灰底区分 */
+  isContainerNode?: (id: string) => boolean;
 }
 
 /** 内置主题：默认（清爽蓝）/ 黑金（商务）/ 森绿（护眼） */
@@ -84,6 +89,7 @@ export const builtinThemes: Record<string, { label: string; theme: Partial<Theme
       level2Fill: '#242424',
       level2Text: '#f0e6c8',
       leafFill: '#202020',
+      leafSoftFill: '#1a1a1a',
       leafStroke: '#3a3a3a',
       leafText: '#e8e0c0',
       selectionColor: '#d4af37',
@@ -754,7 +760,9 @@ export class MindRenderer {
       ctx.fillStyle = this.theme.rootFill;
       ctx.fill();
     } else {
-      ctx.fillStyle = this.theme.leafFill;
+      // 容器节点白底 + 左缘分支色条；叶子节点（用例等）浅灰底，视觉上区分层级
+      const isContainer = n.depth === 1 || (this.opts.isContainerNode?.(n.id) ?? true);
+      ctx.fillStyle = isContainer ? this.theme.leafFill : this.theme.leafSoftFill;
       ctx.fill();
       if (n.depth === 1) {
         ctx.save();
@@ -768,7 +776,9 @@ export class MindRenderer {
         ? this.theme.selectionColor
         : n.depth === 1
           ? withAlpha(color, 0.35)
-          : this.theme.leafStroke;
+          : isContainer
+            ? this.theme.leafStroke
+            : withAlpha(this.theme.leafStroke, 0.6);
       ctx.lineWidth = isSel || isMulti ? 2 : 1;
       ctx.stroke();
     }

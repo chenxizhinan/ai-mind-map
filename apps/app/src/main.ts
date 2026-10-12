@@ -148,6 +148,10 @@ const renderer = new MindRenderer(canvasEl, {
   onToggleCollapse: (n) => toggleCollapse(n.id),
   onDrop: (node, target, position) => dropNode(node.id, target, position),
   isLeafNode: (id) => isLeafNode(id),
+  isContainerNode: (id) => {
+    const n = store.getNode(id);
+    return !!n && registry.get(n.type).role === 'container';
+  },
   onContextMenu: (node, screen) => showCtxMenu(node, screen),
   onActivate: (n) => startEdit(n.id),
 });
@@ -229,7 +233,7 @@ function addSibling(id: string): void {
 
 function deleteNode(id: string): void {
   if (id === store.root.id) {
-    alert('根节点不能删除');
+    toast('根节点不能删除', 'warn');
     return;
   }
   snapshot();
@@ -248,13 +252,13 @@ function moveNode(id: string, targetId: string | null): void {
   let up: MindNode | undefined = target;
   while (up) {
     if (up.id === id) {
-      alert('不能移动到自身或自己的后代之下');
+      toast('不能移动到自身或自己的后代之下', 'warn');
       return;
     }
     up = store.getParent(up.id);
   }
   if (registry.get(target.type).leafOnly) {
-    alert('用例节点不能再添加子节点');
+    toast('用例节点不能再添加子节点', 'warn');
     return;
   }
   snapshot();
@@ -276,7 +280,7 @@ function dropNode(id: string, target: FlatNode | null, position: 'child' | 'befo
   let up: MindNode | undefined = t;
   while (up) {
     if (up.id === id) {
-      alert('不能移动到自身或自己的后代之下');
+      toast('不能移动到自身或自己的后代之下', 'warn');
       return;
     }
     up = store.getParent(up.id);
@@ -284,7 +288,7 @@ function dropNode(id: string, target: FlatNode | null, position: 'child' | 'befo
   snapshot();
   if (position === 'child') {
     if (registry.get(t.type).leafOnly) {
-      alert('用例节点不能再添加子节点');
+      toast('用例节点不能再添加子节点', 'warn');
       return;
     }
     store.moveSubtree(id, t.id);
@@ -417,7 +421,7 @@ window.addEventListener('keydown', (e) => {
     if (!clipboard) return;
     const node = store.getNode(selId)!;
     if (registry.get(node.type).leafOnly) {
-      alert('用例节点不能再添加子节点');
+      toast('用例节点不能再添加子节点', 'warn');
       return;
     }
     snapshot();
@@ -573,7 +577,7 @@ function showCtxMenu(node: FlatNode, screen: { x: number; y: number }): void {
     },
     { label: '新建同级节点', kbd: 'Enter', action: () => addSibling(node.id), },
     { label: '编辑文本', kbd: 'F2', action: () => startEdit(node.id) },
-    { label: '设置节点颜色…', action: () => showStylePanel(node.id) },
+    { label: '设置节点样式…', action: () => showStylePanel(node.id) },
     { label: '展开/折叠', kbd: 'Space', action: () => toggleCollapse(node.id), divider: true },
     { label: '复制子树', kbd: '⌘C', action: () => { clipboard = JSON.stringify(store.getNode(node.id)); } },
     {
@@ -619,7 +623,7 @@ function pasteUnder(parentId: string): void {  if (!clipboard) return;
   const node = store.getNode(parentId);
   if (!node) return;
   if (registry.get(node.type).leafOnly) {
-    alert('用例节点不能再添加子节点');
+    toast('用例节点不能再添加子节点', 'warn');
     return;
   }
   snapshot();
@@ -650,27 +654,80 @@ function convertType(id: string, newType: string): void {
     relayout();
     renderPanel();
   } catch (e) {
-    alert((e as Error).message);
+    toast((e as Error).message, 'error');
   }
 }
 
 // ---------- 样式面板与批量操作 ----------
 const PALETTE = ['#2563eb', '#0891b2', '#16a34a', '#ca8a04', '#ea580c', '#dc2626', '#7c3aed', '#db2777', '#64748b', '#0f172a'];
 
-/** 单节点样式面板（右键 → 设置节点颜色） */
+// ---------- 通用 Toast ----------
+const toastWrap = document.createElement('div');
+toastWrap.id = 'toast-wrap';
+toastWrap.style.cssText =
+  'position:fixed;bottom:52px;left:50%;transform:translateX(-50%);z-index:2000;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none';
+document.body.appendChild(toastWrap);
+
+/**
+ * 通用 toast 提示。type: info(默认)/success/warn/error，2.6s 自动消失。
+ */
+function toast(message: string, level: 'info' | 'success' | 'warn' | 'error' = 'info'): void {
+  const bg: Record<string, string> = {
+    info: '#1e293b',
+    success: '#15803d',
+    warn: '#b45309',
+    error: '#dc2626',
+  };
+  const c = bg[level] ?? bg.info!;
+  const el = document.createElement('div');
+  el.textContent = message;
+  el.style.cssText = `max-width:70vw;padding:9px 16px;border-radius:9px;font-size:13px;line-height:1.5;color:#fff;background:${c};box-shadow:0 8px 30px rgba(15,23,42,0.25);opacity:0;transform:translateY(8px);transition:opacity 0.18s ease,transform 0.18s ease;white-space:pre-wrap`;
+  toastWrap.appendChild(el);
+  requestAnimationFrame(() => {
+    el.style.opacity = '1';
+    el.style.transform = 'translateY(0)';
+  });
+  setTimeout(() => {
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(8px)';
+    setTimeout(() => el.remove(), 220);
+  }, 2600);
+}
+
+/** 单节点样式面板（右键 → 设置节点样式：颜色 + 图标） */
+const ICON_CHOICES: Array<{ value: string; label: string }> = [
+  { value: '', label: '无' },
+  { value: 'dot', label: '●' },
+  { value: 'square', label: '□' },
+  { value: '▲', label: '▲' },
+  { value: '★', label: '★' },
+  { value: '◆', label: '◆' },
+  { value: '⬤', label: '⬤' },
+];
+
 function showStylePanel(nodeId: string): void {
   const menu = ctxMenuEl;
   const node = store.getNode(nodeId);
   if (!node) return;
   const current = String((node.props as { color?: string }).color ?? '');
+  const currentIcon = String((node.props as { icon?: string }).icon ?? '');
   const swatches = PALETTE.map(
     (c) =>
       `<div class="swatch" data-color="${c}" style="width:26px;height:26px;border-radius:7px;background:${c};cursor:pointer;${current === c ? 'outline:2px solid #1e293b;outline-offset:2px;' : ''}"></div>`,
   ).join('');
+  const iconBtns = ICON_CHOICES.map(
+    (ic) =>
+      `<div class="icon-opt" data-icon="${escapeHtml(ic.value)}" title="${ic.label === '无' ? '不显示图标' : ic.label}" style="width:28px;height:28px;border-radius:7px;border:1px solid ${currentIcon === ic.value ? '#2563eb' : '#e2e8f0'};display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;color:#475569;${currentIcon === ic.value ? 'background:#eff6ff;' : ''}">${ic.label === '无' ? '<span style="font-size:11px;color:#94a3b8">无</span>' : escapeHtml(ic.label)}</div>`,
+  ).join('');
   menu.innerHTML = `
-    <div style="padding:10px 12px;display:flex;gap:8px;flex-wrap:wrap;max-width:220px">
-      ${swatches}
-      ${current ? '<div class="swatch" data-color="" title="清除颜色" style="width:26px;height:26px;border-radius:7px;border:1px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:11px;color:#94a3b8">✕</div>' : ''}
+    <div style="padding:10px 12px;max-width:240px">
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:6px;font-weight:600">颜色</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${swatches}
+        ${current ? '<div class="swatch" data-color="" title="清除颜色" style="width:26px;height:26px;border-radius:7px;border:1px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:11px;color:#94a3b8">✕</div>' : ''}
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin:10px 0 6px;font-weight:600">图标</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${iconBtns}</div>
     </div>
   `;
   menu.style.display = 'block';
@@ -680,7 +737,18 @@ function showStylePanel(nodeId: string): void {
       snapshot();
       store.updateNode(nodeId, { props: { color: color || undefined } });
       relayout();
+      if (!color) showStylePanel(nodeId); // 清除后刷新面板，隐藏"✕ 清除"
+      else hideCtxMenu();
+    });
+  });
+  menu.querySelectorAll('.icon-btn, [data-icon]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const icon = (el as HTMLElement).dataset.icon || '';
+      snapshot();
+      store.updateNode(nodeId, { props: { icon: icon || undefined } });
+      relayout();
       hideCtxMenu();
+      toast(icon ? '图标已设置' : '图标已清除', 'success');
     });
   });
 }
@@ -1094,9 +1162,10 @@ const ioActions: Record<string, () => void> = {
           tree,
           annotations: [],
         });
-        if (warnings.length) alert(`导入完成，${warnings.length} 条警告：\n${warnings.slice(0, 5).join('\n')}`);
+        if (warnings.length) toast(`导入完成，${warnings.length} 条警告：${warnings.slice(0, 3).join('；')}`, 'warn');
+        else toast('导入成功', 'success');
       } catch (e) {
-        alert(`导入失败：${(e as Error).message}`);
+        toast(`导入失败：${(e as Error).message}`, 'error');
       }
     });
   },
@@ -1112,9 +1181,10 @@ const ioActions: Record<string, () => void> = {
           tree,
           annotations: [],
         });
-        if (warnings.length) alert(`导入完成，${warnings.length} 条警告：\n${warnings.slice(0, 5).join('\n')}`);
+        if (warnings.length) toast(`导入完成，${warnings.length} 条警告：${warnings.slice(0, 3).join('；')}`, 'warn');
+        else toast('导入成功', 'success');
       } catch (e) {
-        alert(`导入失败：${(e as Error).message}`);
+        toast(`导入失败：${(e as Error).message}`, 'error');
       }
     });
   },
@@ -1125,7 +1195,7 @@ const ioActions: Record<string, () => void> = {
         const d = JSON.parse(new TextDecoder().decode(buf)) as MindDocument;
         loadDoc(d);
       } catch (e) {
-        alert(`导入失败：${(e as Error).message}`);
+        toast(`导入失败：${(e as Error).message}`, 'error');
       }
     });
   },
@@ -1134,7 +1204,7 @@ const ioActions: Record<string, () => void> = {
       const bytes = encodeXmind(store.root, store.document.meta.title);
       download(`${store.document.meta.title || 'mindmap'}.xmind`, bytes.slice().buffer, 'application/octet-stream');
     } catch (e) {
-      alert(`导出失败：${(e as Error).message}`);
+      toast(`导出失败：${(e as Error).message}`, 'error');
     }
   },
   'export-md'(): void {
@@ -1142,13 +1212,13 @@ const ioActions: Record<string, () => void> = {
       const md = encodeMarkdown(store.root);
       download(`${store.document.meta.title || 'mindmap'}.md`, md, 'text/markdown');
     } catch (e) {
-      alert(`导出失败：${(e as Error).message}`);
+      toast(`导出失败：${(e as Error).message}`, 'error');
     }
   },
   'export-png'(): void {
     const url = renderer.exportPNG();
     if (!url) {
-      alert('当前导图过大（全展开超过 5 万节点高度），导出会小到不可读。\n请先折叠部分分支（右键 → 展开折叠 / 全部折叠按钮）再导出 PNG。');
+      toast('导图过大，PNG 会小到不可读。请先折叠部分分支再导出', 'warn');
       return;
     }
     // dataURL → Blob（download() 收 BlobPart）
@@ -1194,7 +1264,7 @@ document.getElementById('btn-collapse-all')?.addEventListener('click', () => {
 });
 document.getElementById('btn-add-case')?.addEventListener('click', () => {
   if (!selected) {
-    alert('先选中一个路径节点');
+    toast('先选中一个节点', 'info');
     return;
   }
   const node = store.getNode(selected.id)!;

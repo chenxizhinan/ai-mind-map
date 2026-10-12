@@ -109,10 +109,17 @@ export function layoutTree(
     return badges.length ? 34 : 0;
   };
 
-  // 类型图标位（NodeType.icon）：图标 16px + 间距 4px
+  // 图标解析：节点级 props.icon 优先，其次 NodeType.icon（默认内置类型不设置 → 不显示）
+  const resolveIcon = (n: BaseNode): string | undefined => {
+    const nodeIcon = (n.props as { icon?: string }).icon;
+    if (typeof nodeIcon === 'string' && nodeIcon) return nodeIcon;
+    if (!registry.has(n.type)) return undefined;
+    return registry.get(n.type).icon;
+  };
+
+  // 图标位宽度：图标 16px + 间距 4px
   const iconW = (n: BaseNode): number => {
-    if (!registry.has(n.type)) return 0;
-    return registry.get(n.type).icon ? 20 : 0;
+    return resolveIcon(n) ? 20 : 0;
   };
 
   const measure = (n: BaseNode): { w: number; h: number; lines: string[] } => {
@@ -186,7 +193,7 @@ export function layoutTree(
       side,
       branch: depth === 1 ? branchIdx : undefined,
       lines: m.lines,
-      icon: registry.has(n.type) ? registry.get(n.type).icon : undefined,
+      icon: resolveIcon(n),
     };
     out.push(flat);
     byId.set(flat.id, flat);
@@ -235,7 +242,7 @@ export function layoutTree(
     side: 'right',
     branch: -1,
     lines: rootM.lines,
-    icon: registry.has(root.type) ? registry.get(root.type).icon : undefined,
+    icon: resolveIcon(root),
   });
 
   let rc = rootY + rootM.h / 2 - rightH / 2;
