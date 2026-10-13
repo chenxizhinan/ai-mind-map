@@ -10,6 +10,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { loadOrCreate, save } from './store.js';
 import { writeFileSync, readFileSync } from 'node:fs';
 import { encodeXmind, encodeMarkdown, renderMethodPrompt, TEST_DESIGN_METHODS } from '@ai-mind-map/core';
+import { singleDocContext, type DocContext } from './doc-manager.js';
 
 interface SubtreeInput {
   type: string;
@@ -37,14 +38,25 @@ export interface RegisterToolsOptions {
   queryLimit?: number;
 }
 
+export type RegisterToolsCtx =
+  | { store: () => import('@ai-mind-map/core').DocStore; filePath: string }
+  | { docs: DocContext };
+
+/** 解析联合 ctx：统一到 DocContext（旧形状适配为 SingleDocContext） */
+function resolveCtx(opts: RegisterToolsCtx): DocContext {
+  if ('docs' in opts) return opts.docs;
+  return singleDocContext(null as never, opts.filePath, opts.store);
+}
+
 export function registerTools(
   server: McpServer,
-  opts: { store: () => import('@ai-mind-map/core').DocStore; filePath: string } & RegisterToolsOptions,
+  opts: RegisterToolsCtx & RegisterToolsOptions,
 ): void {
-  const { store, filePath } = opts;
+  const ctx: DocContext = resolveCtx(opts);
+  const store = (): import('@ai-mind-map/core').DocStore => ctx.store();
   const queryLimit = opts.queryLimit ?? 500;
 
-  const persist = (): void => save(store(), filePath);
+  const persist = (): void => ctx.persist();
 
   server.tool(
     'create_tree',
@@ -281,6 +293,66 @@ export function registerTools(
         const md = encodeMarkdown(store().root);
         writeFileSync(filePath, md, 'utf8');
         return { content: [{ type: 'text', text: `OK: ${filePath}` }] };
+      } catch (e) {
+        return err(e);
+      }
+    },
+  );
+
+  // ---------- 文档管理（多文档模式） ----------
+
+  server.tool(
+    'list_documents',
+    '列出 bridge/MCP 管理的全部脑图文档（id/标题/更新时间/节点数），标记 active=true 的是当前激活文档（后续节点工具作用于它）。',
+    {},
+    async () => {
+      return { content: [{ type: 'text', text: JSON.stringify(ctx.listDocs()) }] };
+    },
+  );
+
+  server.tool(
+    'create_document',
+    '新建一篇脑图文档并激活它（会出现在应用首页列表）。返回 {id,title,rootId}；随后向 rootId add_subtree 填充内容。单文件（--file）模式不支持。',
+    {
+      title: z.string().describe('文档标题，作为根节点文本与文件名来源'),
+    },
+    async ({ title }) => {
+      try {
+        const r = ctx.createDoc({ title });
+        ctx.persist();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(r) + '。已创建并激活，可直接向 rootId add_subtree。',
+            },
+          ],
+        };
+      } catch (e) {
+        return err(e);
+      }
+    },
+  );
+
+  server.tool(
+    'open_document',
+    '切换激活文档（后续所有节点工具作用于它）。id 与 title 二选一；标题重名时返回候选 id 要求用 id 重试。',
+    {
+      id: z.string().optional().describe('文档 id（list_documents 返回的）'),
+      title: z.string().optional().describe('文档标题（支持唯一模糊匹配）'),
+    },
+    async ({ id, title }) => {
+      try {
+        const r = ctx.openDoc({ id, title });
+        const s = ctx.store();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ ...r, nodeCount: ctx.listDocs().find((d) => d.active)?.nodeCount ?? 1 }),
+            },
+          ],
+        };
       } catch (e) {
         return err(e);
       }

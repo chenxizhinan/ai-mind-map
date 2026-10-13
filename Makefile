@@ -3,7 +3,7 @@
 
 PORT := 47213
 
-.PHONY: help install demo dev mcp bridge test typecheck clean
+.PHONY: help install demo dev mcp bridge bridge-file test typecheck clean
 
 help: ## 显示可用命令
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -16,10 +16,13 @@ demo: ## 启动脑图应用（http://localhost:$(PORT)）
 
 dev: demo ## 同 demo
 
-mcp: ## 启动 MCP server（stdio，供 Claude 连接）
-	npx tsx packages/mcp-server/src/cli.ts --file ./testcases.mindmap.json
+mcp: ## 启动 MCP server（stdio 多文档模式，供 Claude 连接）
+	npx tsx packages/mcp-server/src/cli.ts --dir ./mindmaps
 
-bridge: ## 启动桥接服务（实时协作 + AI 对话，http://localhost:47214）
+bridge: ## 启动桥接服务（多文档模式，http://localhost:47214，文档目录 ./mindmaps）
+	npx tsx packages/mcp-server/src/bridge-cli.ts --dir ./mindmaps --port 47214
+
+bridge-file: ## 启动桥接服务（单文档兼容模式，文档 ./testcases.mindmap.json）
 	npx tsx packages/mcp-server/src/bridge-cli.ts --file ./testcases.mindmap.json --port 47214
 
 test: ## 运行测试

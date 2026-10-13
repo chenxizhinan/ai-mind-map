@@ -1,30 +1,47 @@
 #!/usr/bin/env tsx
 /**
  * stdio MCP server 入口：
- *   npx ai-mind-map-mcp --file ./testcases.mindmap.json
+ *   多文档：npx tsx <repo>/packages/mcp-server/src/cli.ts --dir ./mindmaps
+ *   单文档（兼容）：npx tsx <repo>/packages/mcp-server/src/cli.ts --file ./testcases.mindmap.json
  *
  * Claude 侧配置（claude_desktop_config.json / .mcp.json）：
  *   { "command": "npx", "args": ["-y", "tsx", "<repo>/packages/mcp-server/src/cli.ts",
- *                              "--file", "/path/to/testcases.mindmap.json"] }
+ *                              "--dir", "/path/to/mindmaps"] }
  */
 import { parseArgs } from 'node:util';
+import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createRegistry, loadOrCreate } from './store.js';
 import { registerTools } from './tools.js';
+import { DirDocManager } from './doc-manager.js';
 
 const { values } = parseArgs({
   options: {
-    file: { type: 'string', default: './testcases.mindmap.json' },
+    file: { type: 'string' },
+    dir: { type: 'string' },
   },
 });
 
 const registry = createRegistry();
-const store = loadOrCreate(values.file, registry);
-// loadOrCreate 已经建好 store，包一层惰性引用（未来支持多文档时在此扩展）
-let current = store;
+const server = new McpServer({ name: 'ai-mind-map', version: '0.2.0' });
 
-const server = new McpServer({ name: 'ai-mind-map', version: '0.1.0' });
-registerTools(server, { store: () => current, filePath: values.file });
+if (values.dir) {
+  const dir = resolve(values.dir);
+  mkdirSync(dir, { recursive: true });
+  const docs = new DirDocManager(registry, dir);
+  registerTools(server, { docs });
+  console.error(`[ai-mind-map mcp] dir mode: ${dir}`);
+} else {
+  const fp = values.file ?? './testcases.mindmap.json';
+  const store = loadOrCreate(fp, registry);
+  let current = store;
+  registerTools(server, {
+    store: () => current,
+    filePath: fp,
+  });
+  console.error(`[ai-mind-map mcp] file mode: ${resolve(fp)}  [单文档模式]`);
+}
 
 await server.connect(new StdioServerTransport());

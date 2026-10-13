@@ -243,12 +243,6 @@ function isLeafNode(id: string): boolean {
   return !!n && registry.get(n.type).leafOnly === true;
 }
 
-/** 智能新子节点类型：跟随父级语义（folder 下建 folder 路径层，深层叶子用例） */
-function smartChildType(parentDepth: number): string {
-  // 路径深度 1-2 层用 folder，更深默认用例叶子；根的直接子级一律 folder
-  return parentDepth === 0 ? 'folder' : 'case';
-}
-
 function addSibling(id: string): void {
   const node = store.getNode(id);
   const parent = store.getParent(id);
@@ -406,7 +400,10 @@ function startEdit(id: string): void {
   ed.style.left = `${r.left}px`;
   ed.style.top = `${r.top}px`;
   ed.style.width = `${Math.max(140, r.width)}px`;
-  ed.style.height = `${r.height}px`;
+  // 高度随内容自适应：初始贴合节点，输入换行后编辑框跟着长高，
+  // 避免文本溢出框外压到画布上的其他节点
+  ed.style.height = 'auto';
+  ed.style.minHeight = `${r.height}px`;
   ed.textContent = node.text;
   ed.focus();
   document.getSelection()?.selectAllChildren(ed);
@@ -470,7 +467,7 @@ window.addEventListener('keydown', (e) => {
     if (isLeafNode(selId)) {
       addSibling(selId);
     } else {
-      addChild(selId, smartChildType(depthOf(selId)));
+      addChild(selId, 'folder', '新路径'); // Tab 只建路径节点；用例走「+ 用例」按钮
     }
   } else if (e.key === 'Enter') {
     e.preventDefault();
@@ -523,16 +520,6 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ---------- 导航 ----------
-function depthOf(id: string): number {
-  let d = 0;
-  let cur = store.getParent(id);
-  while (cur) {
-    d++;
-    cur = store.getParent(cur.id);
-  }
-  return d;
-}
-
 /** 智能左右键（XMind 行为）：折叠态先展开再进入子级；展开态直接进入；'out' 返回父级 */
 function smartNavigateLR(dir: 'in' | 'out'): void {
   const id = selected?.id;
@@ -624,6 +611,7 @@ searchInput.addEventListener('input', () => {
   searchTimer = setTimeout(runSearch, 150);
 });
 searchInput.addEventListener('keydown', (e) => {
+  if (e.isComposing || e.keyCode === 229) return; // IME 组合态
   if (e.key === 'Enter') {
     e.preventDefault();
     if (!searchMatches.length) {
@@ -655,12 +643,18 @@ function showCtxMenu(node: FlatNode, screen: { x: number; y: number }): void {
   const leaf = isLeafNode(node.id);
   const items: Array<{ label: string; kbd?: string; action?: () => void; danger?: boolean; divider?: boolean; disabled?: boolean; disabledHint?: string }> = [
     {
-      label: leaf ? '新建子节点（用例不可含子节点）' : '新建子节点',
+      label: leaf ? '新建子节点（用例不可含子节点）' : '新建子节点（路径）',
       kbd: 'Tab',
       // 叶子节点按 Tab 自动降级为新建同级（XMind 行为）
-      action: () => (leaf ? addSibling(node.id) : addChild(node.id, smartChildType(depthOf(node.id)))),
+      action: () => (leaf ? addSibling(node.id) : addChild(node.id, 'folder', '新路径')),
       disabled: leaf,
       disabledHint: leaf ? '按 Tab/Enter 将自动新建同级节点' : undefined,
+    },
+    {
+      label: '新建用例节点',
+      action: () => (leaf ? addSibling(node.id) : addChild(node.id, 'case', '新用例')),
+      disabled: leaf,
+      disabledHint: leaf ? '用例下不能建用例；Enter 新建同级用例' : undefined,
     },
     { label: '新建同级节点', kbd: 'Enter', action: () => addSibling(node.id), },
     { label: '编辑文本', kbd: 'F2', action: () => startEdit(node.id) },
@@ -927,15 +921,6 @@ function escapeHtml(s: string): string {
 function fmtTime(iso: string): string {
   return new Date(iso).toLocaleString('zh-CN', { hour12: false });
 }
-function nodePathOf(n: MindNode): string {
-  const parts: string[] = [];
-  let cur: MindNode | undefined = n;
-  while (cur) {
-    parts.unshift(cur.text);
-    cur = store.getParent(cur.id);
-  }
-  return parts.map(escapeHtml).join(' / ');
-}
 
 function renderPanel(): void {
   if (!selected) {
@@ -957,7 +942,6 @@ function renderPanel(): void {
           : '';
   aside.innerHTML = `
     <div class="panel-head">
-      <div class="node-path">${nodePathOf(node)}</div>
       <div class="node-title" style="display:flex;align-items:center">${iconHtml}${escapeHtml(node.text)}</div>
       <div style="font-size:11px;color:#94a3b8;margin-top:3px">${typeLabel} · ${node.id}</div>
     </div>
@@ -1373,6 +1357,7 @@ outlinePane.addEventListener('click', (e) => {
 
 // 大纲内结构键：Enter 建同级（MD 快捷前缀），Tab/⇧Tab 缩进/提升，空文本 Enter 删除
 outlinePane.addEventListener('keydown', (e) => {
+  if (e.isComposing || e.keyCode === 229) return; // IME 组合态
   const span = (e.target as HTMLElement).closest('[data-otext]') as HTMLElement | null;
   if (!span) return;
   const id = span.dataset.otext!;
@@ -1731,6 +1716,7 @@ function commitDocTitle(): void {
 // 编辑器失焦提交
 editorEl().addEventListener('blur', commitEdit);
 editorEl().addEventListener('keydown', (e) => {
+  if (e.isComposing || e.keyCode === 229) return; // IME 组合态：Enter/Esc 属于选词/取消候选，不提交
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     commitEdit();
@@ -1744,6 +1730,7 @@ editorEl().addEventListener('keydown', (e) => {
 // 顶栏文件名编辑（contenteditable）：Enter 提交、Esc 回滚、失焦提交
 const docTitleEl = document.getElementById('doc-title') as HTMLSpanElement;
 docTitleEl.addEventListener('keydown', (e) => {
+  if (e.isComposing || e.keyCode === 229) return; // IME 组合态
   if (e.key === 'Enter') {
     e.preventDefault();
     docTitleEl.blur(); // 触发失焦提交
@@ -1780,19 +1767,119 @@ window.addEventListener('beforeunload', () => {
 
 // ---------- 桥接服务（实时协作） ----------
 const BRIDGE_URL = (localStorage.getItem('ai-mind-map:bridge') ?? 'http://localhost:47214').replace(/\/$/, '');
-let lastPushAt = 0;
+/** 按文档记录的最近推送时间（回声抑制，多文档模式下按 remoteId 区分） */
+const lastPushAtByRemote = new Map<string, number>();
+/** true = bridge 已确认为多文档模式（GET /docs 可用） */
+let bridgeMultiDoc = false;
 
-/** 外部（MCP/AI/另一浏览器）改了文档：重拉全量并刷新视图 */
-async function pullRemote(): Promise<void> {
-  if (Date.now() - lastPushAt < 1500) return; // 自己刚推送过，忽略回声
+interface BridgeDocInfo {
+  id: string;
+  title: string;
+  updatedAt: string;
+  nodeCount: number;
+  active: boolean;
+}
+
+/** 当前打开文档对应的索引条目 */
+function currentEntry(): DocEntry | null {
+  if (!currentDocId) return null;
+  return loadDocsIndex().find((e) => e.id === currentDocId) ?? null;
+}
+
+/**
+ * 外部（MCP/AI/另一浏览器）改了文档：按 remoteId 重拉全量并刷新视图。
+ * docId 缺省时（遗留单文档 bridge）行为同旧版。
+ */
+async function pullRemote(docId?: string): Promise<void> {
+  const entry = currentEntry();
+  const rid = docId ?? entry?.remoteId;
+  if (rid) {
+    const last = lastPushAtByRemote.get(rid) ?? 0;
+    if (Date.now() - last < 1500) return; // 自己刚推送过该文档，忽略回声
+  } else if (Date.now() - (lastPushAtByRemote.get('#legacy') ?? 0) < 1500) {
+    return;
+  }
   try {
-    const res = await fetch(`${BRIDGE_URL}/doc`);
+    const url = rid ? `${BRIDGE_URL}/doc/${encodeURIComponent(rid)}` : `${BRIDGE_URL}/doc`;
+    const res = await fetch(url);
     if (!res.ok) return;
     const d = (await res.json()) as MindDocument;
+    // currentDocId 保持不变：拉取的内容按语义就是当前槽位的最新内容
+    // （多文档模式按 remoteId 对应；遗留模式等价旧版行为）
     loadDoc(d, true); // keepViewport: 平移缩放不动，只换数据
     expandedIds = null; // 默认展开深度
+    if (currentDocId) touchDocEntry(currentDocId, d.meta.title || '未命名导图');
+    syncDocTitle();
   } catch {
     /* bridge 未启动：静默降级为本地模式 */
+  }
+}
+
+interface BridgeDocsResponse {
+  docs: Array<{ id: string; title: string; updatedAt: string; nodeCount: number }>;
+}
+
+/**
+ * 把 bridge 的文档列表合并进本地索引：
+ * - 按 remoteId 匹配 → 更新标题/时间/节点数
+ * - bridge 侧新文档 → 新建索引条目（remoteOnly，内容首次打开时才拉取）
+ * - 本地独有条目不动
+ */
+async function syncDocsFromBridge(): Promise<void> {
+  try {
+    const res = await fetch(`${BRIDGE_URL}/docs`);
+    if (!res.ok) return;
+    const body = (await res.json()) as { docs: Array<{ id: string; title: string; updatedAt: string; nodeCount: number }> };
+    const entries = loadDocsIndex();
+    let changed = false;
+    for (const bd of body.docs) {
+      const existing = entries.find((e) => e.remoteId === bd.id);
+      if (existing) {
+        if (existing.title !== bd.title) {
+          existing.title = bd.title;
+          changed = true;
+        }
+        const t = Date.parse(bd.updatedAt) || Date.now();
+        if (Math.abs(existing.updatedAt - t) > 1500) {
+          existing.updatedAt = t;
+          changed = true;
+        }
+        if (bd.nodeCount !== undefined && existing.nodeCount !== bd.nodeCount) {
+          existing.nodeCount = bd.nodeCount;
+          changed = true;
+        }
+      } else {
+        entries.unshift({
+          id: 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+          remoteId: bd.id,
+          title: bd.title,
+          updatedAt: Date.parse(bd.updatedAt) || Date.now(),
+          nodeCount: bd.nodeCount,
+          remoteOnly: true,
+        });
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveDocsIndex(entries);
+      // 首页可见时刷新列表
+      const home = document.getElementById('home-view');
+      if (home && home.style.display !== 'none') renderHome();
+    }
+  } catch {
+    /* bridge 未启动 */
+  }
+}
+
+/** 探测 bridge 是否多文档模式（GET /docs 200 = 是）。多文档时同步一次列表 */
+async function detectBridgeMode(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BRIDGE_URL}/docs`);
+    if (!res.ok) return false;
+    await syncDocsFromBridge();
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -1800,8 +1887,28 @@ async function pullRemote(): Promise<void> {
 function connectBridge(): void {
   try {
     const es = new EventSource(`${BRIDGE_URL}/events`);
-    es.addEventListener('changed', () => {
-      void pullRemote();
+    es.addEventListener('hello', () => {
+      void detectBridgeMode();
+    });
+    es.addEventListener('changed', (ev) => {
+      // changed 的 data 携带 {docId,title,updatedAt}（旧 bridge 为 {}）
+      let docId: string | undefined;
+      try {
+        docId = (JSON.parse((ev as MessageEvent).data) as { docId?: string }).docId;
+      } catch {
+        /* 旧负载 */
+      }
+      if (docId !== undefined && docId !== '' && loadDocsIndex().some((e) => e.remoteId)) {
+        // 多文档模式：先同步列表（新文档出现/卡片更新），
+        // 只在变更文档是当前打开的那篇时才拉内容
+        void syncDocsFromBridge().then(() => {
+          const cur = currentEntry();
+          if (cur?.remoteId && cur.remoteId === docId) void pullRemote(docId);
+        });
+      } else {
+        // 遗留单文档 bridge 或尚未吸收过文档：保持旧行为
+        void pullRemote();
+      }
     });
     es.onerror = () => {
       /* 断线自动重连由 EventSource 内建 */
@@ -1809,17 +1916,50 @@ function connectBridge(): void {
   } catch {
     /* bridge 未启动 */
   }
+  void detectBridgeMode(); // 启动时也探测一次（覆盖 SSE 已被缓存/代理的场景）
 }
 
-/** 浏览器侧保存：写回 bridge（异步，失败静默——本地 localStorage 仍是兜底） */
-async function pushRemote(): Promise<void> {
-  lastPushAt = Date.now();
+/** 浏览器侧保存：确保当前文档已在 bridge 注册（拿 remoteId），写回 /doc/:id */
+async function ensureRemoteDoc(): Promise<string | null> {
+  const entry = currentEntry();
+  if (entry?.remoteId) return entry.remoteId;
   try {
-    await fetch(`${BRIDGE_URL}/doc`, {
-      method: 'PUT',
+    const res = await fetch(`${BRIDGE_URL}/docs`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(doc),
+      body: JSON.stringify({ title: store.document.meta.title || '未命名导图' }),
     });
+    if (!res.ok) return null;
+    const r = (await res.json()) as { id: string };
+    if (entry) {
+      entry.remoteId = r.id;
+      saveDocsIndex(loadDocsIndex().map((e) => (e.id === entry.id ? entry : e)));
+    }
+    return r.id;
+  } catch {
+    return null;
+  }
+}
+
+async function pushRemote(): Promise<void> {
+  try {
+    const rid = await ensureRemoteDoc();
+    if (rid) {
+      lastPushAtByRemote.set(rid, Date.now());
+      await fetch(`${BRIDGE_URL}/doc/${encodeURIComponent(rid)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(doc),
+      });
+    } else {
+      // 遗留单文档 bridge（POST /docs 400/404）：写 /doc 兼容端点
+      lastPushAtByRemote.set('#legacy', Date.now());
+      await fetch(`${BRIDGE_URL}/doc`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(doc),
+      });
+    }
   } catch {
     /* bridge 未启动 */
   }
@@ -1830,6 +1970,12 @@ interface DocEntry {
   id: string;
   title: string;
   updatedAt: number;
+  /** bridge 侧文档 id（多文档模式；首次推送/同步时挂上） */
+  remoteId?: string;
+  /** bridge 报告的节点数（remoteOnly 卡片展示用，无需先拉内容） */
+  nodeCount?: number;
+  /** 内容尚未拉到本地槽位（bridge 侧新建/吸收的文档） */
+  remoteOnly?: boolean;
 }
 
 const DOCS_INDEX_KEY = 'ai-mind-map:docs'; // 索引：[{id,title,updatedAt}]
@@ -1879,8 +2025,9 @@ function persistCurrent(): void {
   }
 }
 
-/** 打开一个文档（从其槽位加载，失效则新建） */
+/** 打开一个文档（从其槽位加载，失效则新建；remoteOnly 条目先从 bridge 拉内容） */
 function openDoc(id: string): void {
+  const entry = loadDocsIndex().find((e) => e.id === id);
   const raw = localStorage.getItem(DOC_PREFIX + id);
   let d: MindDocument | null = null;
   if (raw) {
@@ -1892,7 +2039,29 @@ function openDoc(id: string): void {
   }
   currentDocId = id;
   localStorage.setItem(LAST_DOC_KEY, id);
+  // 清空撤销栈：history 是全局的，跨文档恢复会把上一篇快照灌进当前文档
+  history = [];
+  future = [];
   loadDoc(d ?? makeDemo(), false);
+  // remoteOnly：内容还在 bridge 侧，异步拉取后刷新
+  if (!d && entry?.remoteId) {
+    void (async () => {
+      try {
+        const res = await fetch(`${BRIDGE_URL}/doc/${encodeURIComponent(entry.remoteId!)}`);
+        if (!res.ok) return;
+        const remote = (await res.json()) as MindDocument;
+        // 用户可能已经切走：仅当仍停在本条目时落盘+装载
+        if (currentDocId !== id) return;
+        localStorage.setItem(DOC_PREFIX + id, JSON.stringify(remote));
+        entry.remoteOnly = false;
+        saveDocsIndex(loadDocsIndex().map((e) => (e.id === id ? { ...e, remoteOnly: false } : e)));
+        loadDoc(remote, false);
+        syncDocTitle();
+      } catch {
+        /* bridge 未启动：保持空文档 */
+      }
+    })();
+  }
   // 每文档独立的展开状态
   const rawExp = localStorage.getItem(LS_EXPANDED + ':' + id);
   if (rawExp) {
@@ -1929,7 +2098,7 @@ function cardHtml(e: DocEntry): string {
     : '—';
   const hues = ['#3b82f6', '#22d3ee', '#4ade80', '#f59e0b', '#f472b6', '#a78bfa', '#34d399'];
   const accent = hues[(e.title || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0) % hues.length]!;
-  const nodeCount = docNodeCount(e.id);
+  const nodeCount = e.nodeCount ?? docNodeCount(e.id);
 
   if (homeViewMode === 'card') {
     return `
@@ -2363,10 +2532,12 @@ async function sendAiMessage(): Promise<void> {
   aiSendBtn.disabled = true;
 
   try {
+    // 当前文档先确保已在 bridge 注册；AI 会话默认作用于当前文档（docId 定向）
+    const rid = await ensureRemoteDoc();
     const res = await fetch(`${BRIDGE_URL}/ai/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(rid ? { message, docId: rid } : { message }),
     });
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
@@ -2421,6 +2592,7 @@ async function sendAiMessage(): Promise<void> {
 
 aiSendBtn.addEventListener('click', () => void sendAiMessage());
 aiInput.addEventListener('keydown', (e) => {
+  if (e.isComposing || e.keyCode === 229) return; // IME 组合态
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     void sendAiMessage();

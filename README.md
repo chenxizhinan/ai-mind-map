@@ -52,10 +52,15 @@ make bridge    # 启动桥接服务（端口 47214）：实时协作 + AI 助手
       "args": [
         "-y", "tsx",
         "<仓库绝对路径>/packages/mcp-server/src/cli.ts",
-        "--file", "/path/to/testcases.mindmap.json"
+        "--dir", "/path/to/mindmaps"
       ]
     }
   }
+```
+
+`--dir` 多文档模式：目录下每个 `*.mindmap.json` 是一篇文档。AI 可用
+`list_documents` / `create_document` / `open_document`（按标题或 id）管理多篇文档；
+`--file` 单文档模式仍受支持（此时 create_document 会提示改用 `--dir`）。
 }
 ```
 
@@ -111,11 +116,15 @@ npm run typecheck # 全 workspace 严格类型检查
 
 ## 桥接服务与 AI 助手
 
-`make bridge` 启动桥接服务（`packages/mcp-server/src/bridge-cli.ts`，端口 47214）后：
+`make bridge` 启动桥接服务（`packages/mcp-server/src/bridge-cli.ts`，端口 47214，
+多文档模式，文档目录 `./mindmaps/`；`make bridge-file` 为旧的单文档兼容模式）后：
 
-- **实时刷新**：应用自动连接桥接服务的 SSE；MCP server / Claude 桌面侧改了
-  `--file` 指定的文档，应用 1 秒内自动重载（平移缩放视口保持不动）；应用里的
-  编辑也会防抖推回桥接服务落盘。单权威副本 + 串行队列保证不交叉写入。
+- **实时刷新**：应用自动连接桥接服务的 SSE；MCP server / Claude 桌面侧改了任何
+  文档，应用 1 秒内自动重载（只刷新当前打开的那篇内容，其余只更新首页卡片）；
+  应用里的编辑也会防抖推回桥接服务落盘。单权威副本 + 串行队列保证不交叉写入。
+- **多文档**：AI 新建的文档（`create_document`）自动出现在应用首页列表；
+  应用里新建/导入的文档首次保存时自动注册到 bridge。首页卡片与 bridge 目录
+  双向同步（按文档 id 关联）。
 - **AI 助手**：顶栏「✦ AI 助手」打开抽屉，用自然语言生成/修订用例（如
   「为支付模块生成 20 个用例，覆盖边界和异常流」）。AI 通过与 MCP 完全相同的
   工具面（add_subtree / query_tree / update_node…）直接读写导图，流式输出，

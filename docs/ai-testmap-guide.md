@@ -6,15 +6,20 @@
 
 ## 方式一：AI 助手抽屉（零配置，最快）
 
-1. `make bridge` 启动桥接服务（端口 47214，管理 `./testcases.mindmap.json`）
+1. `make bridge` 启动桥接服务（多文档模式，端口 47214，文档目录 `./mindmaps/`）
 2. 打开脑图应用（`make demo`，端口 47213）
 3. 点右上角「✦ AI 助手」，直接对话：
 
 ```
 读取 /path/to/BYOS验证与测试用例-测试.md，
+用 create_document 新建一篇「BYOS 验证与测试用例」脑图，
 把每一章作为一级模块、每个小节作为二级模块、表格里的每条用例作为用例节点挂进去。
 用例 props 带 priority（P0-P3）、expected（预期结果）、remark（原 ID + 场景分类）。
 ```
+
+AI 现在具备文档管理能力：`list_documents`（列出现有文档）、`create_document`
+（新建一篇，自动出现在应用首页）、`open_document`（按标题或 id 切换到指定文档
+再更新）。说「生成一篇新脑图」会建新文档；说「更新 XX 那篇」会自动切换过去。
 
 原理：抽屉走 bridge 的 `/ai/chat`，AI 在工具循环里自动调用 `create_tree` / `add_subtree` / `query_tree`，浏览器实时看到节点长出来。
 
@@ -29,7 +34,7 @@
   "mcpServers": {
     "ai-mind-map": {
       "command": "npx",
-      "args": ["tsx", "packages/mcp-server/src/cli.ts", "--file", "/path/to/testcases.mindmap.json"],
+      "args": ["tsx", "packages/mcp-server/src/cli.ts", "--dir", "/path/to/mindmaps"],
       "cwd": "/Users/txlei/workspace/owner/code/ai-mind-map"
     }
   }
@@ -39,17 +44,22 @@
 之后 Claude Code 里可以直接说：
 
 ```
-用 ai-mind-map 把 /path/to/测试.md 的用例整理成脑图：
-- 先 create_tree 建根
+用 ai-mind-map 把 /path/to/测试.md 的用例整理成一篇新脑图：
+- create_document 建新文档（标题取方案名）
 - 按文档章节 add_subtree 逐模块挂载（folder 结构：模块 → 小节 → case）
 - 每条 case 的 props: priority/expected/remark(含原ID)
+- 完成后 list_documents 确认
+要更新已有脑图时：open_document（标题或 id）后再操作。
 ```
 
 **可用工具**（AI 会自动选用）：
 
 | 工具 | 用途 |
 |---|---|
-| `create_tree` | 建/重置根节点 |
+| `list_documents` | 列出全部文档（标记当前激活） |
+| `create_document` | 新建文档并激活（出现在应用首页） |
+| `open_document` | 按标题/id 切换激活文档 |
+| `create_tree` | 重置当前文档根节点 |
 | `add_subtree` | 批量挂子树（模块/用例的主要入口） |
 | `update_node` / `delete_subtree` / `move_subtree` | 增删改移 |
 | `query_tree` | 读树（按类型过滤，分页） |
@@ -98,9 +108,9 @@ npx tsx scripts/md-tests-to-mindmap.ts <测试用例.md> <输出.json> --root "�
 
 ## 已知坑
 
-- **浏览器自动保存覆盖 bridge 文档**：浏览器与 bridge 连接后，任何本地改动都会回写
-  `--file`。外部（AI/MCP）写入会在浏览器下次保存时被覆盖。协作时先在浏览器里打开
-  同一份文档（bridge `changed` 事件会把外部变更拉进来）。
+- **已修复（多文档模式）**：bridge `changed` 事件带 docId，应用只对「当前打开的那篇」
+  拉内容，其余只更新首页卡片；每篇文档独立回声抑制，浏览器不再覆盖 AI 写的其他文档。
+  单文档兼容模式（`make bridge-file`）仍保留旧的覆盖语义。
 - **节点 props 白名单**：case 只接受 `priority/caseType/precondition/steps/expected/
   tags/remark` + 样式字段（color/icon/method/exec）。自定义字段（如 scenario）会被
   静默丢弃，写进 `remark` 才能保留。

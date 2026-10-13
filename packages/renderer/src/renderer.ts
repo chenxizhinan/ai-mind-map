@@ -168,6 +168,9 @@ export class MindRenderer {
   private dropTargetId: string | null = null;
   private dropPosition: 'child' | 'before' | 'after' = 'child';
 
+  // 双击检测（自管，不依赖原生 dblclick）：记录上一次落在节点本体的 pointerup
+  private lastClick: { id: string; t: number; sx: number; sy: number } | null = null;
+
   constructor(
     canvas: HTMLCanvasElement,
     private opts: RendererOptions = {},
@@ -380,7 +383,6 @@ export class MindRenderer {
     c.removeEventListener('pointerup', this.onPointerUp);
     c.removeEventListener('pointerleave', this.onPointerLeave);
     c.removeEventListener('contextmenu', this.onContextMenuEvt);
-    c.removeEventListener('dblclick', this.onDblClick);
     cancelAnimationFrame(this.rafId);
   }
 
@@ -413,18 +415,30 @@ export class MindRenderer {
     c.addEventListener('pointerup', this.onPointerUp);
     c.addEventListener('pointerleave', this.onPointerLeave);
     c.addEventListener('contextmenu', this.onContextMenuEvt);
-    c.addEventListener('dblclick', this.onDblClick);
   }
 
-  /** 双击节点：进入文本编辑（onActivate） */
-  private onDblClick = (e: MouseEvent): void => {
-    const rect = this.canvas.getBoundingClientRect();
-    const hit = this.hitTest(e.clientX - rect.left, e.clientY - rect.top);
-    if (hit) {
-      e.preventDefault();
-      this.opts.onActivate?.(hit.node);
+  /**
+   * 自管双击检测：与上一次 pointerup（节点单击）同节点、间隔 <500ms、
+   * 落点相距 <12px 即视为双击 → onActivate。对手抖宽容（原生 dblclick
+   * 在两次按下间位移稍大即不合成事件，触控板双击常因此失效）。
+   * 返回 true 表示本次 pointerup 已被双击消费。
+   */
+  private maybeActivateDoubleClick(sx: number, sy: number, node: FlatNode): boolean {
+    const now = performance.now();
+    const prev = this.lastClick;
+    this.lastClick = { id: node.id, t: now, sx, sy };
+    if (
+      prev &&
+      prev.id === node.id &&
+      now - prev.t < 500 &&
+      Math.hypot(sx - prev.sx, sy - prev.sy) < 12
+    ) {
+      this.lastClick = null;
+      this.opts.onActivate?.(node);
+      return true;
     }
-  };
+    return false;
+  }
 
   // ---------- 交互 ----------
 
@@ -557,21 +571,27 @@ export class MindRenderer {
       }
       this.marquee = null;
     } else if (this.dragMode === 'node' && this.dragNode) {
-      if (this.dragMoved) {
+      if (this.dragMoved && this.dropTargetId) {
+        // 真正的拖放：有落点目标才走 drop
         const targetId = this.dropTargetId;
         const pos = this.dropPosition;
         this.dropTargetId = null;
-        const target = targetId ? this.byId.get(targetId) ?? null : null;
+        this.lastClick = null; // 拖放打断双击序列
+        const target = this.byId.get(targetId) ?? null;
         this.opts.onDrop?.(this.dragNode, target, pos);
       } else {
+        // 单击，或位移了但没有落点目标的手抖"伪拖拽"：一律按点击处理
         const hit = this.hitTest(sx, sy);
-        if (hit?.zone === 'toggle') {
+        if (!this.dragMoved && hit?.zone === 'toggle') {
           this.selectedId = hit.node.id;
+          this.lastClick = null; // 折叠切换打断双击序列
           this.opts.onToggleCollapse?.(hit.node);
         } else {
           this.selectedId = this.dragNode.id;
           this.multiSelected = new Set([this.dragNode.id]);
           this.opts.onSelect?.(this.dragNode);
+          // 单击选中（右侧详情）之后，若构成双击则就地进入编辑
+          this.maybeActivateDoubleClick(sx, sy, this.dragNode);
         }
       }
       this.dirty = true;
