@@ -21,7 +21,8 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { DocStore, type NodeTypeRegistry } from '@ai-mind-map/core';
 import { collectToolExecutors, runToolLoop, type AnthropicLike } from './tool-loop.js';
 import { renderMethodPrompt } from '@ai-mind-map/core';
@@ -149,6 +150,31 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
     }
 
     try {
+      // ---- 连接信息（Agent 接入配置：MCP / Skill / 说明，供应用页面渲染与下载） ----
+      if (req.method === 'GET' && url.pathname === '/connect') {
+        // 仓库根：从本文件位置上溯（packages/mcp-server/src/ → 上 3 级），
+        // 比 process.cwd() 稳（bridge 可能从任意 cwd 启动）
+        const here = fileURLToPath(import.meta.url); // .../packages/mcp-server/src/bridge.ts
+        const repoRoot = resolve(here, '../../../..');
+        const serverEntry = join(repoRoot, 'packages/mcp-server/src/cli.ts');
+        const mode = isDir ? 'dir' : 'file';
+        const target = isDir ? opts.docs.dir : singleFilePath ?? '';
+        json(res, 200, {
+          bridgeUrl: `http://localhost:${opts.port}`,
+          mode,
+          target,
+          mcpJson: {
+            mcpServers: {
+              'ai-mind-map': {
+                command: 'npx',
+                args: ['-y', 'tsx', serverEntry, mode === 'dir' ? '--dir' : '--file', target],
+              },
+            },
+          },
+        });
+        return;
+      }
+
       // ---- 文档列表（两种模式） ----
       if (req.method === 'GET' && url.pathname === '/docs') {
         json(res, 200, { docs: docs.listDocs() });

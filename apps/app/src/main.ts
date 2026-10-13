@@ -2293,6 +2293,162 @@ document.getElementById('home-new')?.addEventListener('click', () => {
   openTemplateDialog();
 });
 
+// 连接 Agent：MCP/Skill/提示词的获取、复制与下载
+document.getElementById('home-connect')?.addEventListener('click', () => {
+  void openConnectDialog();
+});
+
+interface BridgeConnectInfo {
+  bridgeUrl: string;
+  mode: 'dir' | 'file';
+  target: string;
+  mcpJson: { mcpServers: Record<string, { command: string; args: string[] }> };
+}
+
+/** Agent 接入对话框：从 bridge /connect 拉真实配置；bridge 离线时降级为占位模板 */
+async function openConnectDialog(): Promise<void> {
+  let info: BridgeConnectInfo | null = null;
+  try {
+    const res = await fetch(`${BRIDGE_URL}/connect`);
+    if (res.ok) info = (await res.json()) as BridgeConnectInfo;
+  } catch {
+    /* bridge 未启动 */
+  }
+
+  const mcpConfigText = info
+    ? JSON.stringify(info.mcpJson, null, 2)
+    : JSON.stringify(
+        {
+          mcpServers: {
+            'ai-mind-map': {
+              command: 'npx',
+              args: ['-y', 'tsx', '<仓库绝对路径>/packages/mcp-server/src/cli.ts', '--dir', '/path/to/mindmaps'],
+            },
+          },
+        },
+        null,
+        2,
+      );
+
+  const skillText = `---
+name: gen-testmap
+description: 用 ai-mind-map（MCP）把需求/方案/代码整理成测试用例脑图
+---
+
+# 测试用例脑图生成
+
+1. 调用 ai-mind-map 的 get_test_methods 获取测试设计方法约束
+2. 读取目标材料（$ARGUMENTS：文档路径或代码目录）
+3. 会话开始先 list_documents 了解现有文档；**用户要求生成新的用例集时必须 create_document 新建文档**（出现在应用首页），严禁往现有文档里灌
+4. 更新既有文档：open_document（标题或 id）切换后再操作
+5. 按被测对象拆模块（folder），按 维度 → 功能点 → 测试点 → 用例 四级展开
+6. 每条用例（case）props 必须含：
+   - priority: P0-P3（P0=阻塞发布）
+   - expected: 可观察、可判定的预期结果
+   - remark: 来源引用（文档章节 / 代码文件:行）
+   - precondition / steps: 有前置或明确步骤时填写
+7. 完成后 list_documents 自查并向用户报告：模块数、用例数、P0 数`;
+
+  const chatHint = `我在用 ai-mind-map 管理测试用例脑图（MCP 已连接）。
+请读取 <方案文档或代码目录>，然后：
+1. 先 list_documents 看现有文档；
+2. 用 create_document 新建一篇脑图（标题 = 方案名）；
+3. add_subtree 按「模块 → 小节 → 用例」挂载，用例 props 带 priority / expected / remark（来源引用）。
+不要动我已有的脑图文档。`;
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText =
+    'position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:1500;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:24px 26px;width:680px;max-width:94vw;max-height:88vh;overflow-y:auto;box-shadow:0 24px 80px rgba(15,23,42,0.3)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div style="font-size:17px;font-weight:700;color:#1e293b">连接 Agent</div>
+        <button id="conn-close" style="border:none;background:transparent;cursor:pointer;color:#94a3b8;font-size:15px">✕</button>
+      </div>
+      <div style="font-size:12.5px;color:#64748b;margin-bottom:14px">
+        ${info
+          ? `bridge 在线 · ${info.mode === 'dir' ? `多文档模式（${escapeHtml(info.target)}）` : '单文档模式'} · ${escapeHtml(info.bridgeUrl)}`
+          : `<b style="color:#b45309">bridge 未连接</b> · 显示的是模板配置。先 <code>make bridge</code> 启动后刷新本页可获取填好真实路径的配置`}
+      </div>
+
+      <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <b style="font-size:13.5px;color:#1e293b">① MCP 接入</b>
+          <span style="display:flex;gap:6px">
+            <button class="btn conn-copy" data-copy="mcp" style="padding:4px 12px;font-size:12px">复制配置</button>
+            <button class="btn conn-dl" data-dl="mcp" style="padding:4px 12px;font-size:12px">下载 .mcp.json</button>
+          </span>
+        </div>
+        <div style="font-size:11.5px;color:#64748b;margin-bottom:6px">
+          放到项目 <code>.mcp.json</code>（Claude Code）或 Claude Desktop 的
+          <code>claude_desktop_config.json</code>，重启后 Agent 即可 list_documents / create_document / open_document 管理你的脑图。
+        </div>
+        <pre id="conn-mcp" style="background:#0f172a;color:#e2e8f0;border-radius:9px;padding:12px;font-size:11.5px;line-height:1.55;overflow-x:auto;margin:0;white-space:pre">${escapeHtml(mcpConfigText)}</pre>
+      </div>
+
+      <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <b style="font-size:13.5px;color:#1e293b">② Skill（团队复用）</b>
+          <span style="display:flex;gap:6px">
+            <button class="btn conn-copy" data-copy="skill" style="padding:4px 12px;font-size:12px">复制 Skill</button>
+            <button class="btn conn-dl" data-dl="skill" style="padding:4px 12px;font-size:12px">下载 SKILL.md</button>
+          </span>
+        </div>
+        <div style="font-size:11.5px;color:#64748b;margin-bottom:6px">
+          存为 <code>.claude/skills/gen-testmap/SKILL.md</code>（项目）或
+          <code>~/.claude/skills/…</code>（全局），之后 <code>/gen-testmap &lt;方案或代码目录&gt;</code> 一句话生成用例脑图。
+        </div>
+        <pre id="conn-skill" style="display:none">${escapeHtml(skillText)}</pre>
+        <div style="font-size:11.5px;color:#94a3b8">内容已就绪：点上方按钮复制或下载（不占弹窗空间）</div>
+      </div>
+
+      <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <b style="font-size:13.5px;color:#1e293b">③ 直接对话提示词</b>
+          <button class="btn conn-copy" data-copy="chat" style="padding:4px 12px;font-size:12px">复制提示词</button>
+        </div>
+        <div style="font-size:11.5px;color:#64748b;margin-bottom:6px">
+          已接入 MCP 的 Agent 里直接粘贴；配合应用内「✦ AI 助手」抽屉也可用（bridge 在线时）。
+        </div>
+        <pre id="conn-chat" style="display:none">${escapeHtml(chatHint)}</pre>
+        <div style="font-size:11.5px;color:#94a3b8">内容已就绪：点上方按钮复制</div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const close = (): void => overlay.remove();
+  overlay.querySelector('#conn-close')?.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+
+  const payload = (): Record<string, string> => ({
+    mcp: mcpConfigText,
+    skill: skillText,
+    chat: chatHint,
+  });
+  overlay.querySelectorAll('.conn-copy').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      const key = (btn as HTMLElement).dataset.copy!;
+      try {
+        await navigator.clipboard.writeText(payload()[key]!);
+        btn.textContent = '已复制 ✓';
+        setTimeout(() => (btn.textContent = key === 'mcp' ? '复制配置' : key === 'skill' ? '复制 Skill' : '复制提示词'), 1400);
+      } catch {
+        toast('复制失败：浏览器未授权剪贴板', 'warn');
+      }
+    }),
+  );
+  overlay.querySelectorAll('.conn-dl').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const key = (btn as HTMLElement).dataset.dl!;
+      if (key === 'mcp') download('.mcp.json', mcpConfigText, 'application/json');
+      else if (key === 'skill') download('SKILL.md', skillText, 'text/markdown');
+    }),
+  );
+}
+
 /** 模板选择对话框：名称 + 模板卡片，确认后创建 */
 function openTemplateDialog(): void {
   const tpl = BUILTIN_TEMPLATES;
