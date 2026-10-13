@@ -31,7 +31,7 @@ const DEFAULTS = {
   direction: 'both' as const,
 };
 
-const MAX_W = 460;
+const MAX_W = 560;
 const MIN_W = 64;
 const CHAR_W = 8;
 const CJK_W = 15;
