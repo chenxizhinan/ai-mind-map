@@ -193,6 +193,7 @@ export function layoutTree(
       depth: number,
     ): void {
       const m = measure(n);
+      const slot = nodeStackH(n); // 该子树的实际占高（与子级排布同口径）
       let x: number;
       if (depth === 1) {
         x = side === 'right' ? rootM.w + o.levelGap : -o.levelGap - m.w;
@@ -200,6 +201,9 @@ export function layoutTree(
         const p = byId.get(parentId!)!;
         x = side === 'right' ? p.x + p.w + o.levelGap : p.x - o.levelGap - m.w;
       }
+      // 父框垂直居中于自己的槽位（而不是贴槽位顶）——子级列也居中于同一槽位，
+      // 两者同心：父节点在子级正中，且互不越界
+      const y = top + (slot - m.h) / 2;
       const flat: FlatNode = {
         id: idOf(n),
         type: n.type,
@@ -208,7 +212,7 @@ export function layoutTree(
         depth,
         parentId,
         x,
-        y: top,
+        y,
         w: m.w,
         h: m.h,
         hidden: false,
@@ -222,12 +226,11 @@ export function layoutTree(
       byId.set(flat.id, flat);
       const kids = n.children ?? [];
       if (expanded.has(idOf(n)) && kids.length > 0) {
-        // 子级排布必须完整落在该节点的槽位 [top, top + stackHeight] 内：
-        // innerH < m.h 时以父中线居中；innerH ≥ m.h 时从槽位顶排起
-        // （此前一律以父中线居中，innerH > m.h 时整列向上溢出槽位上缘，
-        // 每层都发生，深层展开时相邻子树互相侵入堆叠）
+        // 子级列居中于同一槽位 [top, top+slot]：从槽位中心向两侧排开。
+        // innerH ≤ slot 恒成立，列高 innerH 居中后完整落在槽位内，
+        // 相邻子树互不侵入；父框已按槽位居中，视觉上在子级正中
         const innerH = innerStackH(n);
-        let cursor = top + Math.max((m.h - innerH) / 2, 0);
+        let cursor = top + (slot - innerH) / 2;
         for (const k of kids) {
           placeStack(k, cursor, side, branchIdx, n.id, depth + 1);
           cursor += nodeStackH(k) + o.siblingGap;
