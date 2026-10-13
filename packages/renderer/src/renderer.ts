@@ -65,6 +65,8 @@ export interface RendererOptions {
   onMultiSelect?: (ids: string[]) => void;
   onToggleCollapse?: (node: FlatNode) => void;
   onActivate?: (node: FlatNode) => void;
+  /** 缩放变化（滚轮/捏合/API），应用同步缩放百分比显示 */
+  onViewportChange?: (scale: number) => void;
   onContextMenu?: (node: FlatNode, screen: { x: number; y: number }) => void;
   /**
    * 拖放。position: 'child' 挂到 target 下；'before'/'after' 成为 target 的兄弟。
@@ -215,7 +217,9 @@ export class MindRenderer {
   }
 
   setViewport(vp: Partial<Viewport>): void {
+    const scaleChanged = vp.scale !== undefined && vp.scale !== this.vp.scale;
     this.vp = { ...this.vp, ...vp };
+    if (scaleChanged) this.opts.onViewportChange?.(this.vp.scale);
     this.dirty = true;
     this.requestFrame();
   }
@@ -713,10 +717,21 @@ export class MindRenderer {
       }
     }
 
-    for (const n of visible) {
-      if (!n.parentId) continue;
-      const p = this.byId.get(n.parentId);
-      if (p) this.drawLink(p, n);
+    // 连线剔除：端点在视口附近（含 margin）即绘制——只剔除整条线都在视口外很远的。
+    // 之前只画「子节点在视口内」的边，导致父/子离屏时连线整条消失，
+    // 视口边缘的节点看起来悬空没有归属（视觉割裂）。
+    const linkMargin = 200 + extra;
+    for (const n of this.nodes) {
+      if (n.depth === 0) continue;
+      const p = this.byId.get(n.parentId ?? '');
+      if (!p) continue;
+      // 线段包围盒（贝塞尔控制点在两端点 x 的中点，不会超出包围盒）
+      const lx0 = Math.min(p.x, n.x) - linkMargin;
+      const lx1 = Math.max(p.x + p.w, n.x + n.w) + linkMargin;
+      const ly0 = Math.min(p.y, n.y) - linkMargin;
+      const ly1 = Math.max(p.y + p.h, n.y + n.h) + linkMargin;
+      if (lx1 < rect.x0 || lx0 > rect.x1 || ly1 < rect.y0 || ly0 > rect.y1) continue;
+      this.drawLink(p, n);
     }
     for (const n of visible) this.drawNode(n, visibleParentIds);
 
@@ -774,10 +789,11 @@ export class MindRenderer {
       return;
     }
 
-    // 横向布局：父右(左)缘中点 → 子左(右)缘中点，三次贝塞尔
+    // 横向布局：父靠子侧的缘中点 → 子靠父侧的缘中点，三次贝塞尔。
+    // 左侧树父在右：从父左缘出发接到子右缘（此前错接子左缘，线横穿子节点盒子）
     const x1 = n.side === 'left' ? p.x : p.x + p.w;
     const y1 = p.y + p.h / 2;
-    const x2 = n.x;
+    const x2 = n.side === 'left' ? n.x + n.w : n.x;
     const y2 = n.y + n.h / 2;
     const mx = (x1 + x2) / 2;
     ctx.beginPath();
@@ -869,7 +885,8 @@ export class MindRenderer {
     const fs = Math.max(8, 14 * s);
     ctx.font = `${isRoot ? '600 ' : ''}${fs}px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
     ctx.textBaseline = 'middle';
-    const lineH = 22 * s;
+    // 行高随实际字号兜底：fs 被 clamp 在 8px 下限后（s<0.57），22*s 会小于字高导致行间挤压
+    const lineH = Math.max(22 * s, fs * 1.5);
     const iconOffset = n.icon ? 20 * s : 0;
     const firstY = p0.y + (h - n.lines!.length * lineH) / 2 + lineH / 2;
     if (n.icon) {

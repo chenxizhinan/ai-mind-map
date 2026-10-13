@@ -167,6 +167,7 @@ const renderer = new MindRenderer(canvasEl, {
   },
   onContextMenu: (node, screen) => showCtxMenu(node, screen),
   onActivate: (n) => startEdit(n.id),
+  onViewportChange: () => updateZoomPct(),
 });
 void renderer;
 

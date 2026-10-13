@@ -25,13 +25,13 @@ export interface LayoutOptions {
 const DEFAULTS = {
   levelGap: 56,
   lineHeight: 22,
-  siblingGap: 8,
+  siblingGap: 14,
   paddingX: 14,
   defaultExpandDepth: 2,
   direction: 'both' as const,
 };
 
-const MAX_W = 260;
+const MAX_W = 340;
 const MIN_W = 64;
 const CHAR_W = 8;
 const CJK_W = 15;
@@ -162,13 +162,16 @@ export function layoutTree(
       return Math.max(h, measure(n).h);
     }
 
-    /** 直接可见后代的栈高（不含父自身，居中用） */
+    /** 直接可见后代的栈高（不含父自身，居中用）。与父自身高取 max：
+     *  子树净高小于父框时（如 1 行 folder 挂 1 条多行 case），子级仍从父中线排开，
+     *  避免向上溢出压到上一个兄弟 */
     function innerStackH(n: BaseNode): number {
       const kids = n.children ?? [];
       if (!expanded.has(idOf(n)) || kids.length === 0) return 0;
       let h = 0;
       for (const c of kids) h += stackHeight(c) + o.siblingGap;
-      return h - o.siblingGap;
+      h -= o.siblingGap;
+      return Math.max(h, measure(n).h);
     }
 
     /** 横向放置一棵子树及其可见后代 */
