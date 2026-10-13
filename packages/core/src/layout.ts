@@ -152,7 +152,11 @@ export function layoutTree(
       else leftTop.push(c);
     });
 
-    /** 可见子树总高（折叠则只算自身） */
+    /**
+     * 可见子树总高（折叠则只算自身）。
+     * 与放置逻辑严格一致：每个节点的实际占高 = max(子级净高, 自身高)——
+     * 子级以节点中线排开时至少要占自身高度，否则深层子树会侵入相邻子树。
+     */
     function stackHeight(n: BaseNode): number {
       const kids = n.children ?? [];
       if (!expanded.has(idOf(n)) || kids.length === 0) return measure(n).h;
@@ -162,16 +166,21 @@ export function layoutTree(
       return Math.max(h, measure(n).h);
     }
 
-    /** 直接可见后代的栈高（不含父自身，居中用）。与父自身高取 max：
-     *  子树净高小于父框时（如 1 行 folder 挂 1 条多行 case），子级仍从父中线排开，
-     *  避免向上溢出压到上一个兄弟 */
+    /** 直接可见后代的总占高（不含父自身，居中用）。含每个子级的膨胀占高 */
     function innerStackH(n: BaseNode): number {
       const kids = n.children ?? [];
       if (!expanded.has(idOf(n)) || kids.length === 0) return 0;
       let h = 0;
       for (const c of kids) h += stackHeight(c) + o.siblingGap;
       h -= o.siblingGap;
-      return Math.max(h, measure(n).h);
+      return h;
+    }
+
+    /** 子级排布所需总高（innerStackH 与自身高取 max）：决定该节点在父栈里的占高 */
+    function nodeStackH(n: BaseNode): number {
+      const kids = n.children ?? [];
+      if (!expanded.has(idOf(n)) || kids.length === 0) return measure(n).h;
+      return Math.max(innerStackH(n), measure(n).h);
     }
 
     /** 横向放置一棵子树及其可见后代 */
@@ -213,16 +222,21 @@ export function layoutTree(
       byId.set(flat.id, flat);
       const kids = n.children ?? [];
       if (expanded.has(idOf(n)) && kids.length > 0) {
-        let cursor = top + m.h / 2 - innerStackH(n) / 2;
+        // 子级排布必须完整落在该节点的槽位 [top, top + stackHeight] 内：
+        // innerH < m.h 时以父中线居中；innerH ≥ m.h 时从槽位顶排起
+        // （此前一律以父中线居中，innerH > m.h 时整列向上溢出槽位上缘，
+        // 每层都发生，深层展开时相邻子树互相侵入堆叠）
+        const innerH = innerStackH(n);
+        let cursor = top + Math.max((m.h - innerH) / 2, 0);
         for (const k of kids) {
           placeStack(k, cursor, side, branchIdx, n.id, depth + 1);
-          cursor += stackHeight(k) + o.siblingGap;
+          cursor += nodeStackH(k) + o.siblingGap;
         }
       }
     }
 
-    const rightH = rightTop.reduce((acc, c) => acc + stackHeight(c), 0) + o.siblingGap * Math.max(0, rightTop.length - 1);
-    const leftH = leftTop.reduce((acc, c) => acc + stackHeight(c), 0) + o.siblingGap * Math.max(0, leftTop.length - 1);
+    const rightH = rightTop.reduce((acc, c) => acc + nodeStackH(c), 0) + o.siblingGap * Math.max(0, rightTop.length - 1);
+    const leftH = leftTop.reduce((acc, c) => acc + nodeStackH(c), 0) + o.siblingGap * Math.max(0, leftTop.length - 1);
     const totalH = Math.max(rightH, leftH, rootM.h);
     const rootY = (totalH - rootM.h) / 2;
 
@@ -265,14 +279,60 @@ export function layoutTree(
   const rowGap = o.levelGap; // 父缘到子缘的行间距
   const maxRowWidth = 3200;  // 单行最大宽度，超过则换行
 
-  /** 可见子树总宽（折叠则只算自身） */
+  /** 模拟 placeVertical 的贪心装箱（共享给 subtreeW/subtreeH，保证口径一致） */
+  function packRows(n: BaseNode): BaseNode[][] {
+    const kids = n.children ?? [];
+    const rows: BaseNode[][] = [];
+    let row: BaseNode[] = [];
+    let rowW = 0;
+    for (const k of kids) {
+      const kw = subtreeW(k);
+      if (row.length && rowW + o.siblingGap + kw > maxRowWidth) {
+        rows.push(row);
+        row = [];
+        rowW = 0;
+      }
+      if (row.length) rowW += o.siblingGap;
+      row.push(k);
+      rowW += kw;
+    }
+    if (row.length) rows.push(row);
+    return rows;
+  }
+
+  /**
+   * 可见子树总宽（折叠则只算自身）。
+   * 子级装箱成多行时，实际占宽 = 最宽行（各行都居中于父中心），
+   * 而非所有子级单行宽度之和——否则槽位按虚宽推进、行居中后相邻子树互相侵入。
+   */
   function subtreeW(n: BaseNode): number {
     const kids = n.children ?? [];
     if (!expanded.has(idOf(n)) || kids.length === 0) return measure(n).w;
+    const rows = packRows(n);
     let w = 0;
-    for (const c of kids) w += subtreeW(c);
-    w += o.siblingGap * (kids.length - 1);
+    for (const r of rows) {
+      const rW = r.reduce((acc, k) => acc + subtreeW(k), 0) + o.siblingGap * (r.length - 1);
+      w = Math.max(w, rW);
+    }
     return Math.max(w, measure(n).w);
+  }
+
+  /**
+   * 可见子树纵向占高：自身框高 + 子级行带总高。
+   * 严格对齐 placeVertical 的行推进：底缘 = y + m.h + Σ_rows(rH_i + rowGap)，
+   * 即占高 = m.h + Σ(rH_i + rowGap)。漏掉 m.h 或 rowGap 都会让下一兄弟行
+   * 压上来（多级子树堆叠）。
+   */
+  function subtreeH(n: BaseNode): number {
+    const kids = n.children ?? [];
+    if (!expanded.has(idOf(n)) || kids.length === 0) return measure(n).h;
+    const rows = packRows(n);
+    let h = 0;
+    for (const r of rows) {
+      const rH = Math.max(...r.map((k) => subtreeH(k)));
+      h += rH + rowGap;
+    }
+    return Math.max(measure(n).h + h, measure(n).h);
   }
 
   /**
@@ -291,6 +351,8 @@ export function layoutTree(
   ): void {
     const m = measure(n);
     const y = dirSign === 1 ? edge : edge - m.h;
+    // 父框横向居中于自己的槽位（槽位宽 = subtreeW），展开后父节点始终在子级行正中上方
+    const sw = subtreeW(n);
     const flat: FlatNode = {
       id: idOf(n),
       type: n.type,
@@ -298,7 +360,7 @@ export function layoutTree(
       props: n.props ?? {},
       depth,
       parentId,
-      x: left,
+      x: left + (sw - m.w) / 2,
       y,
       w: m.w,
       h: m.h,
@@ -332,12 +394,14 @@ export function layoutTree(
       }
       if (row.length) rows.push(row);
 
-      // 各行依次放置（down 向下长，up 向上长）；行高 = 行内最高子树
+      // 各行依次放置（down 向下长，up 向上长）；行高 = 行内最高子树的纵向占高。
+      // 行居中于槽位（left 起、subtreeW(n) 宽）——不用父框中心，否则宽行向左
+      // 溢出槽位压到上一个兄弟子树
       let rowEdge = dirSign === 1 ? y + m.h + rowGap : y - rowGap;
       for (const r of rows) {
         const rW = r.reduce((acc, k) => acc + subtreeW(k), 0) + o.siblingGap * (r.length - 1);
-        const rH = Math.max(...r.map((k) => measure(k).h));
-        let cursor = left + m.w / 2 - rW / 2; // 行居中于父节点中心
+        const rH = Math.max(...r.map((k) => subtreeH(k)));
+        let cursor = left + (sw - rW) / 2; // 行居中于槽位
         for (const k of r) {
           placeVertical(k, cursor, rowEdge, dirSign, branchIdx, n.id, depth + 1);
           cursor += subtreeW(k) + o.siblingGap;
@@ -407,8 +471,8 @@ export function layoutTree(
     let rowEdge = dirSign === 1 ? rootM.h + rowGap : -rowGap;
     for (const r of rows) {
       const rW = r.reduce((acc, e) => acc + subtreeW(e.k), 0) + o.siblingGap * (r.length - 1);
-      const rH = Math.max(...r.map((e) => measure(e.k).h));
-      let cursor = rootX + rootM.w / 2 - rW / 2;
+      const rH = Math.max(...r.map((e) => subtreeH(e.k)));
+      let cursor = rootX + (firstRowW > rootM.w ? (firstRowW - rW) / 2 : 0);
       for (const e of r) {
         placeVertical(e.k, cursor, rowEdge, dirSign, e.i, root.id, 1);
         cursor += subtreeW(e.k) + o.siblingGap;
