@@ -27,6 +27,9 @@ import { DocStore, type NodeTypeRegistry } from '@ai-mind-map/core';
 import { collectToolExecutors, runToolLoop, type AnthropicLike } from './tool-loop.js';
 import { renderMethodPrompt } from '@ai-mind-map/core';
 import { DirDocManager, SingleDocContext, isValidDocId, type DocContext } from './doc-manager.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { registerTools } from './tools.js';
 
 /** 单文件模式选项（兼容旧形态） */
 export interface BridgeFileOptions {
@@ -105,6 +108,71 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
     return p;
   };
 
+  /** 根路径自描述页：浏览器直接访问 bridge 端口时给出服务说明与端点指引 */
+  const rootPageHtml = (): string => {
+    let docCount = 1;
+    try {
+      docCount = isDir ? docs.listDocs().length : 1;
+    } catch {
+      /* 保持默认 */
+    }
+    return `<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>ai-mind-map bridge</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", sans-serif; background: #f6f7fb; color: #1e293b;
+         display: flex; align-items: center; justify-content: center; min-height: 90vh; margin: 0; }
+  .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 26px 30px;
+          box-shadow: 0 12px 40px rgba(15,23,42,.12); max-width: 520px; }
+  h1 { font-size: 17px; margin: 0 0 8px; }
+  p { font-size: 13px; color: #475569; line-height: 1.7; margin: 6px 0; }
+  code { background: #f1f5f9; border-radius: 5px; padding: 1px 6px; font-size: 12px; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .ok { color: #16a34a; font-weight: 600; }
+</style></head>
+<body><div class="card">
+  <h1>✅ ai-mind-map bridge 服务运行中</h1>
+  <p>模式：<code>${isDir ? '多文档（--dir）' : '单文件（--file）'}</code> · 已管理文档：<b>${docCount}</b> 篇</p>
+  <p>这是数据同步服务（REST + SSE），<b>没有管理界面</b>。测试用例脑图应用通常部署在同机的
+     <code>:47213</code> 端口（如 <code>http://&lt;本机IP&gt;:47213</code>），请以实际部署地址为准。</p>
+  <p>主要端点：<code>GET /docs</code> · <code>POST /docs</code> ·
+     <code>GET|PUT|DELETE /doc/:id</code> · <code>GET /events</code>(SSE) ·
+     <code>POST /ai/chat</code> · <code>GET /connect</code> · <code>POST /mcp</code>(MCP over HTTP)</p>
+</div></body></html>`;
+  };
+
+  /**
+   * MCP Streamable HTTP（/mcp）：让远程 Agent（Claude Code / Codex / 任意 MCP 客户端）
+   * 无需本地安装仓库，直接把 `http://<bridge>/mcp` 作为 MCP server URL 导入即可使用。
+   *
+   * 采用无状态模式：每个请求一个 transport + McpServer 实例（请求结束即释放），
+   * 工具面与 stdio MCP server 完全一致（都来自 registerTools），操作作用于当前激活文档。
+   */
+  const handleMcpHttp = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    try {
+      const mcpServer = new McpServer({ name: 'ai-mind-map', version: '0.2.0' });
+      registerTools(mcpServer, isDir ? { docs } : { store: singleStore!, filePath: singleFilePath! });
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined, // 无状态：无会话校验，天然支持多客户端/重连
+        enableJsonResponse: true,
+      });
+      res.on('close', () => {
+        void transport.close();
+        mcpServer.close();
+      });
+      await mcpServer.connect(transport);
+      await transport.handleRequest(req, res);
+    } catch (e) {
+      console.error('[bridge] /mcp error:', e instanceof Error ? e.message : e);
+      if (!res.headersSent) {
+        json(res, 500, { error: e instanceof Error ? e.message : String(e) });
+      } else {
+        res.end();
+      }
+    }
+  };
+
   /** 文件被外部（MCP server / 编辑器）修改时重载权威副本；mtime 未变返回 false */
   const reloadIfChanged = (): boolean => {
     if (isDir) return false; // dir 模式走 scanForChanges
@@ -139,6 +207,19 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
       return;
     }
 
+    // ---- 根路径：自描述页（浏览器直接访问 bridge 端口时给出指引） ----
+    if (req.method === 'GET' && url.pathname === '/') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+      res.end(rootPageHtml());
+      return;
+    }
+
+    // ---- MCP Streamable HTTP（/mcp）：远程 Agent 无需本地安装，直接 import 该 URL ----
+    if (url.pathname === '/mcp') {
+      await handleMcpHttp(req, res);
+      return;
+    }
+
     // ---- SSE 事件流 ----
     if (req.method === 'GET' && url.pathname === '/events') {
       res.writeHead(200, {
@@ -163,10 +244,23 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
         const serverEntry = join(repoRoot, 'packages/mcp-server/src/cli.ts');
         const mode = isDir ? 'dir' : 'file';
         const target = isDir ? opts.docs.dir : singleFilePath ?? '';
+        // bridge 对外地址：以请求 Host 为准（支持远程部署/自定义端口/反向代理）
+        const hostHeader = req.headers.host ?? `localhost:${opts.port}`;
+        const bridgeUrl = `http://${hostHeader}`;
+        const mcpUrl = `${bridgeUrl}/mcp`;
         json(res, 200, {
-          bridgeUrl: `http://localhost:${opts.port}`,
+          bridgeUrl,
           mode,
           target,
+          /** MCP Streamable HTTP 端点：远程 Agent 直接 import 该 URL 即可使用 */
+          mcpUrl,
+          /** 推荐配置：远程 HTTP MCP（Claude Code / Codex / Cursor 等，复制即用） */
+          mcpHttpJson: {
+            mcpServers: {
+              'ai-mind-map': { type: 'http', url: mcpUrl },
+            },
+          },
+          /** 本地 stdio 配置（Agent 与 bridge 同机时可用） */
           mcpJson: {
             mcpServers: {
               'ai-mind-map': {

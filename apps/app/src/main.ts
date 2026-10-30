@@ -2695,6 +2695,9 @@ interface BridgeConnectInfo {
   bridgeUrl: string;
   mode: 'dir' | 'file';
   target: string;
+  /** MCP Streamable HTTP 端点（远程接入，复制即用） */
+  mcpUrl?: string;
+  mcpHttpJson?: { mcpServers: Record<string, { type: 'http'; url: string }> };
   mcpJson: { mcpServers: Record<string, { command: string; args: string[] }> };
 }
 
@@ -2708,6 +2711,11 @@ async function openConnectDialog(): Promise<void> {
     /* bridge 未启动 */
   }
 
+  // MCP 配置：远程 HTTP（复制即用，无需本地安装仓库）与本地 stdio（同机）两种变体
+  const mcpUrl = info?.mcpUrl ?? `${BRIDGE_URL}/mcp`;
+  const mcpHttpText = info?.mcpHttpJson
+    ? JSON.stringify(info.mcpHttpJson, null, 2)
+    : JSON.stringify({ mcpServers: { 'ai-mind-map': { type: 'http', url: mcpUrl } } }, null, 2);
   const mcpConfigText = info
     ? JSON.stringify(info.mcpJson, null, 2)
     : JSON.stringify(
@@ -2724,23 +2732,19 @@ async function openConnectDialog(): Promise<void> {
       );
 
   const skillText = `---
-name: gen-testmap
-description: 用 ai-mind-map（MCP）把需求/方案/代码整理成测试用例脑图
+name: test-case-designer
+description: 从需求/RFC/接口/代码/历史缺陷设计、补齐或评审手工测试用例，并通过 ai-mind-map MCP 写入脑图；含 P0-P3 定级规范与质量门禁
 ---
 
-# 测试用例脑图生成
+# 测试用例设计与评审
 
-1. 调用 ai-mind-map 的 get_test_methods 获取测试设计方法约束
-2. 读取目标材料（$ARGUMENTS：文档路径或代码目录）
-3. 会话开始先 list_documents 了解现有文档；**用户要求生成新的用例集时必须 create_document 新建文档**（出现在应用首页），严禁往现有文档里灌
-4. 更新既有文档：open_document（标题或 id）切换后再操作
-5. 按被测对象拆模块（folder），按 维度 → 功能点 → 测试点 → 用例 四级展开
-6. 每条用例（case）props 必须含：
-   - priority: P0-P3（P0=阻塞发布）
-   - expected: 可观察、可判定的预期结果
-   - remark: 来源引用（文档章节 / 代码文件:行）
-   - precondition / steps: 有前置或明确步骤时填写
-7. 完成后 list_documents 自查并向用户报告：模块数、用例数、P0 数`;
+1. 先调用 get_test_methods 获取测试设计方法约束；按需求选择适用方法（状态机/场景法/等价类/边界值/判定表/故障注入/兼容矩阵/数据一致性/安全/性能），不要机械套满全部维度
+2. 层级由需求决定（产品/入口 → 版本阶段 → 前置状态 → 用例），同一层只表达一个分类维度，≤4 层文件夹；禁止用 profile、current、SWITCH_PENDING 等内部实现名做业务目录
+3. 会话开始先 list_documents；生成新用例集必须 create_document 新建，严禁往现有文档里灌；更新既有文档先 open_document
+4. 用 add_subtree 一次提交整棵子树；标题 =【必要条件】执行动作｜唯一核心结果，一个用例只测一个可独立判定的点
+5. 长背景/数据清单写 props.detail；来源/接口/内部状态码写 props.remark；预期必须可观察可判定
+6. 优先级按 业务影响×发生概率×恢复难度 定级（P0 必须能回答“失败是否禁止发布”）；不允许默认全 P0，同一业务域不能全 P0；P0/P1 必须有完整步骤与断言，备注说明失败影响
+7. 完成后 query_tree 自查，并向用户报告：数量、覆盖方法、优先级分布与待确认项`;
 
   const chatHint = `我在用 ai-mind-map 管理测试用例脑图（MCP 已连接）。
 请读取 <方案文档或代码目录>，然后：
@@ -2768,15 +2772,28 @@ description: 用 ai-mind-map（MCP）把需求/方案/代码整理成测试用�
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
           <b style="font-size:13.5px;color:#1e293b">① MCP 接入</b>
           <span style="display:flex;gap:6px">
-            <button class="btn conn-copy" data-copy="mcp" style="padding:4px 12px;font-size:12px">复制配置</button>
+            <button class="btn conn-copy" data-copy="mcpHttp" style="padding:4px 12px;font-size:12px">复制远程配置</button>
             <button class="btn conn-dl" data-dl="mcp" style="padding:4px 12px;font-size:12px">下载 .mcp.json</button>
           </span>
         </div>
-        <div style="font-size:11.5px;color:#64748b;margin-bottom:6px">
-          放到项目 <code>.mcp.json</code>（Claude Code）或 Claude Desktop 的
-          <code>claude_desktop_config.json</code>，重启后 Agent 即可 list_documents / create_document / open_document 管理你的脑图。
+        <div style="font-size:11.5px;color:#64748b;margin-bottom:8px">
+          <b style="color:#15803d">推荐：远程 HTTP</b>（无需本地安装仓库，复制后粘到
+          <code>.mcp.json</code> / Claude Desktop / Codex 配置，重启客户端即可用）：
         </div>
-        <pre id="conn-mcp" style="background:#0f172a;color:#e2e8f0;border-radius:9px;padding:12px;font-size:11.5px;line-height:1.55;overflow-x:auto;margin:0;white-space:pre">${escapeHtml(mcpConfigText)}</pre>
+        <pre id="conn-mcp-http" style="background:#0f172a;color:#e2e8f0;border-radius:9px;padding:12px;font-size:11.5px;line-height:1.55;overflow-x:auto;margin:0 0 8px;white-space:pre">${escapeHtml(mcpHttpText)}</pre>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+          <code id="conn-mcp-url" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:3px 8px;font-size:11.5px;color:#475569">${escapeHtml(mcpUrl)}</code>
+          <button class="btn conn-copy" data-copy="mcpUrl" style="padding:3px 10px;font-size:11.5px">复制 URL</button>
+          <span style="font-size:11px;color:#94a3b8">Codex / Cursor 亦支持该 URL 方式接入</span>
+        </div>
+        <details>
+          <summary style="cursor:pointer;font-size:11.5px;color:#64748b;user-select:none">本地 stdio 方式（Agent 与 bridge 同机时使用）</summary>
+          <div style="font-size:11.5px;color:#64748b;margin:6px 0 6px">
+            放到项目 <code>.mcp.json</code>（Claude Code）或 Claude Desktop 的
+            <code>claude_desktop_config.json</code>，重启后 Agent 即可管理你的脑图。
+          </div>
+          <pre id="conn-mcp" style="background:#0f172a;color:#e2e8f0;border-radius:9px;padding:12px;font-size:11.5px;line-height:1.55;overflow-x:auto;margin:0;white-space:pre">${escapeHtml(mcpConfigText)}</pre>
+        </details>
       </div>
 
       <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:12px">
@@ -2788,8 +2805,9 @@ description: 用 ai-mind-map（MCP）把需求/方案/代码整理成测试用�
           </span>
         </div>
         <div style="font-size:11.5px;color:#64748b;margin-bottom:6px">
-          存为 <code>.claude/skills/gen-testmap/SKILL.md</code>（项目）或
-          <code>~/.claude/skills/…</code>（全局），之后 <code>/gen-testmap &lt;方案或代码目录&gt;</code> 一句话生成用例脑图。
+          完整版（含层级/标题/优先级标准与质量门禁脚本）已内置仓库
+          <code>.agents/skills/test-case-designer/</code>；上面的精简版可存为
+          <code>.claude/skills/test-case-designer/SKILL.md</code> 快速上手。
         </div>
         <pre id="conn-skill" style="display:none">${escapeHtml(skillText)}</pre>
         <div style="font-size:11.5px;color:#94a3b8">内容已就绪：点上方按钮复制或下载（不占弹窗空间）</div>
@@ -2817,17 +2835,26 @@ description: 用 ai-mind-map（MCP）把需求/方案/代码整理成测试用�
   });
 
   const payload = (): Record<string, string> => ({
+    mcpHttp: mcpHttpText,
+    mcpUrl,
     mcp: mcpConfigText,
     skill: skillText,
     chat: chatHint,
   });
+  const copyLabel: Record<string, string> = {
+    mcpHttp: '复制远程配置',
+    mcpUrl: '复制 URL',
+    mcp: '复制本地配置',
+    skill: '复制 Skill',
+    chat: '复制提示词',
+  };
   overlay.querySelectorAll('.conn-copy').forEach((btn) =>
     btn.addEventListener('click', async () => {
       const key = (btn as HTMLElement).dataset.copy!;
       try {
         await navigator.clipboard.writeText(payload()[key]!);
         btn.textContent = '已复制 ✓';
-        setTimeout(() => (btn.textContent = key === 'mcp' ? '复制配置' : key === 'skill' ? '复制 Skill' : '复制提示词'), 1400);
+        setTimeout(() => (btn.textContent = copyLabel[key] ?? '复制'), 1400);
       } catch {
         toast('复制失败：浏览器未授权剪贴板', 'warn');
       }
@@ -2836,7 +2863,7 @@ description: 用 ai-mind-map（MCP）把需求/方案/代码整理成测试用�
   overlay.querySelectorAll('.conn-dl').forEach((btn) =>
     btn.addEventListener('click', () => {
       const key = (btn as HTMLElement).dataset.dl!;
-      if (key === 'mcp') download('.mcp.json', mcpConfigText, 'application/json');
+      if (key === 'mcp') download('.mcp.json', mcpHttpText, 'application/json');
       else if (key === 'skill') download('SKILL.md', skillText, 'text/markdown');
     }),
   );
