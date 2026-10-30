@@ -69,28 +69,51 @@ AI 现在具备文档管理能力：`list_documents`（列出现有文档）、`
 
 ## 方式三：Skill（团队复用，一次配置）
 
-把下面的提示词存为 `.claude/skills/gen-testmap/SKILL.md`，之后 `/gen-testmap <方案或代码目录>` 一句话完成：
+仓库已内置完整的 **test-case-designer** Skill（Codex 标准：`.agents/skills/test-case-designer/`），
+覆盖工作模式、测试分析、追溯、层级、用例设计方法、字段规范和 **P0-P3 优先级规则**，
+并带质量门禁脚本 `scripts/validate-test-cases.js`。
 
-```markdown
----
-name: gen-testmap
-description: 从需求/方案/代码生成测试用例脑图（ai-mind-map MCP）
----
-
-# 测试用例脑图生成
-
-1. 调用 ai-mind-map 的 get_test_methods 获取设计方法约束
-2. 读取目标材料（$ARGUMENTS：文档路径或代码目录）
-3. create_tree 建根（根名 = 产品/方案名）
-4. 按被测对象拆模块（folder，一级/二级），每个模块下按
-   维度→功能点→测试点→用例 四级展开（参考 get_test_methods 的结构约束）
-5. 每条用例（case）props 必须含：
-   - priority: P0-P3（P0=阻塞发布）
-   - expected: 可观察、可判定的预期结果
-   - remark: 来源引用（文档章节 / 代码文件:行）
-   - precondition / steps: 有前置或明确步骤时填写
-6. 全部挂载后 query_tree 自查一遍数量与层级，向用户报告：模块数、用例数、P0 数
+```bash
+# Codex（repo 级）：本仓库内直接可用（.agents/skills 会被自动发现）
+# 让 Codex 执行：选择模式 → 测试分析 → 建立追溯 → 设计用例 → MCP 写入 → Review
+#   “按需求文档设计手工测试用例脑图”
+#   “只读评审现有用例的覆盖缺口、追溯与重复问题”
+# 质量门禁（写入后运行）：
+node .agents/skills/test-case-designer/scripts/validate-test-cases.js <mindmap.json> --strict
 ```
+
+结构：
+
+```text
+.agents/skills/test-case-designer/
+├── SKILL.md                     # 入口：边界、主流程、MCP 写入步骤、输出报告
+├── agents/openai.yaml           # Codex 元数据与依赖（ai-mind-map MCP）
+├── references/
+│   ├── case-writing-standard.md # 字段/标题/详情/备注/禁止内部实现词
+│   ├── hierarchy-standard.md    # 层级主轴和导航结构决策规则
+│   ├── operation-modes.md       # 新建/补充/重组/只读评审的权限和退出条件
+│   ├── priority-standard.md     # P0-P3 定义、判断维度、定级规则与门禁
+│   ├── test-analysis-standard.md # 测试条件、风险、预言、数据与待确认项
+│   ├── test-design-methods.md   # 状态机/场景/等价类/判定表/故障注入/兼容矩阵…
+│   ├── traceability-standard.md # 来源→测试条件→稳定用例 ID
+│   └── review-checklist.md      # 全量 Review 清单与退出标准
+└── scripts/
+    └── validate-test-cases.js   # 确定性校验：字段/追溯/重复/空业务分组/…
+```
+
+其他客户端复用时应直接读取同一 `SKILL.md` 和按需引用 `references/`，不要复制一套会独立漂移的简化规则。
+
+### 优先级定义（P0–P3）
+
+| 优先级 | 定义 | 执行要求 |
+|---|---|---|
+| P0 | 失败会阻塞发布，且没有可接受的绕行、降级或风险接受方案 | 每次发布必须执行，失败即停止发布 |
+| P1 | 高业务风险或高发生概率；若发布必须显式接受风险并提供缓解方案 | 完整回归必须执行，失败需修复或显式风险接受 |
+| P2 | 次要功能、低概率边界或影响范围有限 | 常规回归执行，按风险决定是否阻塞 |
+| P3 | 极低概率、防御性或探索性场景 | 定向或周期性执行，通常不阻塞发布 |
+
+定级依据 = 业务影响 × 发生概率 × 恢复难度 × 数据/安全风险 × 是否版本核心目标（不是开发工作量）。完整规则见
+`.agents/skills/test-case-designer/references/priority-standard.md`。AI 生成用例时（bridge/MCP）这些规则已内置于 system prompt。
 
 ## 一次性转换：表格型测试文档 → 脑图 JSON
 
@@ -114,5 +137,13 @@ npx tsx scripts/md-tests-to-mindmap.ts <测试用例.md> <输出.json> --root "�
 - **节点 props 白名单**：case 只接受 `priority/caseType/precondition/steps/expected/
   tags/remark` + 样式字段（color/icon/method/exec）。自定义字段（如 scenario）会被
   静默丢弃，写进 `remark` 才能保留。
-- **MCP/脚本生成必须自己分配节点 id**（`n_0001` 递增）；空 id 的文档在浏览器里无法
-  选中/编辑节点。
+- **执行状态** `props.exec` 取值 `pass`（通过）/ `blocked`（阻塞）/ `fail`（失败）；
+  不写 = 未执行（默认，画布与大纲不展示）。其他取值会被静默丢弃。
+- **长文本放详情**：folder（模块/路径）节点标题保持简短，长背景、数据清单、参考材料写
+  `props.detail`（应用右侧「详情」可完整查看/编辑），短备注仍用 `props.note`。
+- **清理/删除**：删节点用 `delete_subtree`（单节点/子树），批量删用 `delete_nodes`
+  （返回 `{removedIds, errors}`，某个 id 失败不影响其它）；删整篇文档用 `delete_document`
+  （`--dir` 模式删除对应 `.mindmap.json`，不可恢复）。根节点不可删除；请勿绕过 MCP
+  直接改文件。
+- **MCP/脚本生成建议自己分配节点 id**（`n_0001` 递增）；缺失或重复的 id 在文档加载时
+  会被自动补成唯一编号。

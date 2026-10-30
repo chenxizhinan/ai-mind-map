@@ -6,6 +6,8 @@
  *   供 AI 工具循环注入 system prompt 约束生成质量，也可用于前端展示。
  */
 
+import { priorityRubricText } from './priority.js';
+
 /** 模板节点定义（递归） */
 export interface TemplateNode {
   type: string;
@@ -274,10 +276,13 @@ export function findTemplate(id: string): MindTemplate | undefined {
  * dimensions：当前导图一级节点标注的 method keys（AI 只需针对存在的维度展开）。
  */
 export function renderMethodPrompt(dimensions: string[]): string {
+  const rubric = priorityRubricText();
   if (!dimensions.length) {
     return [
-      '当前导图未标注测试维度。生成用例时请综合运用：等价类划分、边界值分析、场景法、错误推测，',
-      '覆盖正常流/边界/异常/权限四类，并给每条用例标注 P0-P3 优先级。',
+      '当前导图未标注测试维度。先从事实来源提取测试条件、风险和判定依据，再选择真正适用的设计方法；',
+      '不要机械套满正常、边界、异常、权限等类别，也不要生成无风险依据的组合。每条用例标注 P0-P3 优先级。',
+      '',
+      rubric,
     ].join('\n');
   }
   const matched = dimensions.map((k) => findMethod(k)).filter((m): m is TestDesignMethod => !!m);
@@ -296,33 +301,37 @@ export function renderMethodPrompt(dimensions: string[]): string {
       ].join('\n'),
     );
   }
-  parts.push('每条用例 props 带 priority（P0-P3）；能写 steps/expected 的写全。');
+  parts.push('每条用例 props 带 priority（P0-P3）、caseType（质量风险类型）和 testLevel（UI/API/服务/数据库/契约/端到端层级），并写全 precondition/steps/expected/remark。remark 记录稳定 CASE-*、来源和 TCND-*。');
   parts.push(
     [
-      '树的结构必须多级拆分，严禁在维度下直接平铺用例：',
-      '第 1 级 = 测试维度（已有，带 method 标注，不要改动）；',
-      '第 2 级 = 功能点（被测对象的功能模块，如"登录""订单创建"，一个 folder 对应一个功能点）；',
-      '第 3 级 = 测试点（该功能点下按设计方法拆出的具体检验项，如"密码长度边界""并发提交"，folder）；',
-      '第 4 级 = 用例（case，每个测试点下 2-6 条，props 带 priority/steps/expected）。',
-      '即：维度 → 功能点 → 测试点 → 用例。add_subtree 时按此层级一次提交整棵子树，',
-      '用 query_tree 确认维度节点 id 后，把"功能点→测试点→用例"整棵挂到对应维度下。',
+      '树结构用于执行和查找，不是覆盖矩阵：',
+      '- 保留已有且明确要求的 method 维度节点；其下按稳定业务能力、用户任务或关键状态组织。',
+      '- 同一层只表达一个维度；只有能提高查找或执行效率时才增加测试点文件夹。',
+      '- 默认控制在 2-4 层文件夹，交叉维度放标题、标签或追溯信息，不生成固定四级模板。',
+      '- add_subtree 时按选定层级一次提交完整子树，并在写入后 query_tree 核对归属。',
       '',
       '用例规范（对齐 ISTQB 用例要素与主流测试平台字段约定，硬性）：',
       '- 用例字段：标题（title）、前置条件（props.precondition）、测试步骤（props.steps，编号有序、',
-      '  一步一个动作）、预期结果（props.expected，与步骤对应）、优先级（props.priority P0-P3）；',
+      '  一步一个动作）、预期结果（props.expected，整条用例的可判定通过条件）、优先级（props.priority P0-P3）、',
+      '  用例类型（props.caseType）、测试层级（props.testLevel）、备注（props.remark，稳定用例 ID + 来源 + 测试条件 ID）；',
+      '- caseType 表达功能/边界/异常/安全/性能/兼容/数据/流程/可靠性/可访问性/国际化等风险类型；',
+      '  testLevel 表达 ui/api/service/database/contract/e2e；不得再把 api/ui 写进 caseType；',
       '- 用例标题 = 陈述式一句话，[前置状态] + 执行动作 + 预期结果 三要素缺一不可，动作要写出步骤',
       '  （点了什么/调了什么），不能只写结果。合格："密码正确时点击登录按钮，跳转到工作台首页"、',
       '  "输入 11 位手机号点击获取验证码，发送成功"。不合格："正确密码登录成功"（缺动作）、',
       '  "测试登录"、"场景 1"（无信息量）；',
-      '- 前置条件写"执行前必须成立的状态"（如"已登录管理员账号"），没有则不写，不要把步骤塞进来；',
+      '- 前置条件写"执行前必须成立的状态"；确实没有时写"无"，不要把步骤塞进来；',
       '- 步骤（steps）每条一个可执行动作，用动词开头（输入/点击/调用/等待…），不超过两句话；',
       '- 预期结果必须可观察、可判定：写"看得见/查得到"的现象（页面跳转、提示文案、返回码、数据状态），',
-      '  禁止"功能正常""符合预期"这类无法判定的表述；',
+      '  禁止"功能正常""符合预期"这类无法判定的表述；多个断言可以编号，但必须共同证明同一主要测试目标；',
       '- 同一测试点下的多条用例，标题用条件区分（正常输入/空输入/超长输入…），一目了然；',
       '- 测试点标题 = 检验项本身，体现来源方法：边界值拆出的写明边界位置（如"手机号长度 11 位边界"），',
       '  异常注入写明故障类型（如"断网时提交订单"），不用"测试 xx""xx 场景"等空泛词。',
+      '- 节点标题保持简短（建议 ≤ 20 字）：长背景说明、数据清单、参考材料写 folder 的 props.detail',
+      '  （应用右侧「详情」可完整查看），不要把长段落塞进节点标题。',
     ].join('\n'),
   );
+  parts.push(rubric);
   return parts.join('\n');
 }
 

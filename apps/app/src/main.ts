@@ -19,6 +19,11 @@ import {
   type MindNode,
 } from '@ai-mind-map/core';
 import { MindRenderer, builtinThemeRefs } from '@ai-mind-map/renderer';
+import {
+  reconcileDocsIndex,
+  type BridgeDocInfo,
+  type DocEntry,
+} from './doc-index-sync.js';
 
 const THEME_KEY = 'ai-mind-map:theme';
 
@@ -30,7 +35,11 @@ function applyTheme(name: string): void {
 import {
   BUILTIN_TEMPLATES,
   CASE_TYPES,
+  TEST_LEVELS,
   type CaseProps,
+  type ExecStatus,
+  type FolderProps,
+  PRIORITY_SPECS,
   buildTemplateDoc,
   type MindDocument,
 } from '@ai-mind-map/core';
@@ -182,10 +191,27 @@ const LAYOUT_LABELS: Record<LayoutDir, string> = {
 };
 let layoutDir = (localStorage.getItem(LAYOUT_KEY) as LayoutDir) || 'both';
 
+// ---------- 默认展开层级设置 ----------
+type ExpandDepth = 1 | 2 | 3 | 'all';
+const EXPAND_DEPTH_KEY = 'ai-mind-map:default-expand-depth';
+function normalizeExpandDepth(v: string | null): ExpandDepth {
+  if (v === '1' || v === '2' || v === '3') return Number(v) as 1 | 2 | 3;
+  if (v === 'all') return 'all';
+  return 2;
+}
+let defaultExpandDepth: ExpandDepth = normalizeExpandDepth(localStorage.getItem(EXPAND_DEPTH_KEY));
+/** 传给 layoutTree 的 defaultExpandDepth（'all' 用一个大数表示全部展开） */
+function expandDepthOption(): number {
+  return defaultExpandDepth === 'all' ? Number.MAX_SAFE_INTEGER : defaultExpandDepth;
+}
+function expandDepthLabel(): string {
+  return defaultExpandDepth === 'all' ? '全部' : `${defaultExpandDepth} 层`;
+}
+
 /** 布局 + 渲染 + 统计 + 持久化。selected 传 id 保持选中跨布局。 */
 function relayout(): void {
   const flat = layoutTree(store.root, registry, {
-    defaultExpandDepth: 2,
+    defaultExpandDepth: expandDepthOption(),
     expandedIds: expandedIds ?? undefined,
     direction: layoutDir,
   });
@@ -198,6 +224,7 @@ function relayout(): void {
   renderer.setData(flat, counts);
   document.getElementById('stats')!.textContent =
     `${countNodes(store.root).toLocaleString()} 节点 · ${store.document.annotations.filter((a) => a.status === 'open').length} 未解决批注`;
+  refreshStatsIfOpen();
   const selId = selected?.id;
   if (selId) {
     selected = flat.find((n) => n.id === selId) ?? null;
@@ -287,14 +314,24 @@ function moveNode(id: string, targetId: string | null): void {
   renderer.focusNode(id);
 }
 
-/** 设置/清除用例执行标记（pass/fail/blocked；undefined=清除） */
-function setNodeExec(id: string, exec: 'pass' | 'fail' | 'blocked' | undefined): void {
+/** 设置/清除用例执行标记（pass/blocked/fail；undefined=未执行，不展示） */
+function setNodeExec(id: string, exec: ExecStatus | undefined): void {
   const node = store.getNode(id);
   if (!node) return;
+  if (((node.props as CaseProps).exec ?? undefined) === exec) return; // 状态未变不产生撤销步骤
   snapshot();
   store.updateNode(id, { props: { exec: exec ?? undefined } });
   relayout();
   renderOutlineIfVisible();
+  syncExecChips(id, exec);
+}
+
+/** 同步面板「执行状态」按钮的选中态（只改 class，不重建表单，避免丢掉未保存的编辑） */
+function syncExecChips(id: string, exec: ExecStatus | undefined): void {
+  if (selected?.id !== id) return;
+  document.querySelectorAll<HTMLButtonElement>('#panel [data-exec]').forEach((btn) => {
+    btn.classList.toggle('active', (btn.dataset.exec ?? '') === (exec ?? ''));
+  });
 }
 
 /** 大纲可见时刷新（保持滚动位置由 syncOutlineToSelection 处理） */
@@ -660,12 +697,12 @@ function showCtxMenu(node: FlatNode, screen: { x: number; y: number }): void {
     { label: '新建同级节点', kbd: 'Enter', action: () => addSibling(node.id), },
     { label: '编辑文本', kbd: 'F2', action: () => startEdit(node.id) },
     { label: '设置节点样式…', action: () => showStylePanel(node.id) },
-    ...(leaf
+    ...(node.type === 'case'
       ? [
           { label: '✓ 标记通过', action: () => setNodeExec(node.id, 'pass') },
-          { label: '✗ 标记失败', action: () => setNodeExec(node.id, 'fail') },
           { label: '⏸ 标记阻塞', action: () => setNodeExec(node.id, 'blocked') },
-          { label: '清除执行标记', action: () => setNodeExec(node.id, undefined), divider: true },
+          { label: '✗ 标记失败', action: () => setNodeExec(node.id, 'fail') },
+          { label: '↺ 标记未执行', action: () => setNodeExec(node.id, undefined) },
         ]
       : []),
     { label: '展开/折叠', kbd: 'Space', action: () => toggleCollapse(node.id), divider: !leaf },
@@ -916,12 +953,129 @@ document.getElementById('batch-cancel')?.addEventListener('click', () => {
 // ---------- 侧边面板 ----------
 const aside = document.getElementById('panel') as HTMLElement;
 
+// ---------- 面板宽度拖拽 ----------
+const PANEL_WIDTH_KEY = 'ai-mind-map:panel-width';
+const PANEL_WIDTH_DEFAULT = 340;
+const PANEL_WIDTH_MIN = 280;
+const PANEL_WIDTH_MAX = 760;
+const panelResizer = document.getElementById('panel-resizer') as HTMLElement | null;
+
+/** 面板最大宽度：小屏时给画布留出空间 */
+function panelWidthLimit(): number {
+  return Math.max(PANEL_WIDTH_MIN, Math.min(PANEL_WIDTH_MAX, window.innerWidth - 420));
+}
+
+/** 应用面板宽度（px 会被夹在 [MIN, limit]）；persist 时写入 localStorage */
+function setPanelWidth(px: number, persist = true): number {
+  const w = Math.round(Math.max(PANEL_WIDTH_MIN, Math.min(panelWidthLimit(), px)));
+  aside.style.width = `${w}px`;
+  // 宽度变化后重新布局面板内容：文本域自动增高、长标题折叠判断
+  autosizePanelTextareas();
+  refreshTitleOverflow();
+  if (persist) localStorage.setItem(PANEL_WIDTH_KEY, String(w));
+  return w;
+}
+
+const savedPanelWidth = Number(localStorage.getItem(PANEL_WIDTH_KEY));
+setPanelWidth(Number.isFinite(savedPanelWidth) && savedPanelWidth > 0 ? savedPanelWidth : PANEL_WIDTH_DEFAULT, false);
+
+let panelDrag: { startX: number; startW: number } | null = null;
+function endPanelDrag(): void {
+  if (!panelDrag) return;
+  panelDrag = null;
+  panelResizer?.classList.remove('dragging');
+  document.body.classList.remove('panel-resizing');
+  localStorage.setItem(PANEL_WIDTH_KEY, String(Math.round(aside.getBoundingClientRect().width)));
+}
+panelResizer?.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  panelDrag = { startX: e.clientX, startW: aside.getBoundingClientRect().width };
+  panelResizer.classList.add('dragging');
+  document.body.classList.add('panel-resizing');
+  panelResizer.setPointerCapture(e.pointerId);
+});
+panelResizer?.addEventListener('pointermove', (e) => {
+  if (!panelDrag) return;
+  setPanelWidth(panelDrag.startW + (panelDrag.startX - e.clientX), false);
+});
+panelResizer?.addEventListener('pointerup', endPanelDrag);
+panelResizer?.addEventListener('pointercancel', endPanelDrag);
+panelResizer?.addEventListener('dblclick', () => setPanelWidth(PANEL_WIDTH_DEFAULT));
+panelResizer?.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  e.preventDefault();
+  const step = e.shiftKey ? 40 : 12;
+  setPanelWidth(aside.getBoundingClientRect().width + (e.key === 'ArrowLeft' ? step : -step));
+});
+// 窗口变窄时夹住宽度，避免画布被挤没（不覆盖用户保存的宽度）
+window.addEventListener('resize', () => setPanelWidth(aside.getBoundingClientRect().width, false));
+
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 }
 function fmtTime(iso: string): string {
   return new Date(iso).toLocaleString('zh-CN', { hour12: false });
 }
+
+/** 复制图标（两个叠放的矩形，剪贴板语义） */
+const COPY_ICON =
+  '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+  '<rect x="5.5" y="4.5" width="7.5" height="9" rx="1.6" stroke="currentColor" stroke-width="1.3"/>' +
+  '<path d="M10.5 4V3.3c0-.72-.58-1.3-1.3-1.3H4.3C3.58 2 3 2.58 3 3.3v6.9c0 .72.58 1.3 1.3 1.3h1.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' +
+  '</svg>';
+
+/** 复制文本到剪贴板并提示（Clipboard API 不可用时回退 execCommand） */
+async function copyText(text: string, label: string): Promise<void> {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+    await navigator.clipboard.writeText(text);
+  } catch {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    } catch {
+      toast('复制失败，请手动选择文本', 'error');
+      return;
+    }
+  }
+  toast(`已复制${label}`, 'success');
+}
+
+/**
+ * 文本域高度随内容自适应，避免长文本被固定高度裁切。
+ * box-sizing 为 border-box，scrollHeight 不含边框，故补上上下边框（含内边距）后再设高。
+ */
+function autosizeTextarea(ta: HTMLTextAreaElement): void {
+  const cs = getComputedStyle(ta);
+  const border = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+  ta.style.height = 'auto';
+  ta.style.height = `${Math.ceil(ta.scrollHeight + border)}px`;
+}
+
+/** 侧边面板渲染/切换后统一自适应（含批注回复框、新增步骤等） */
+function autosizePanelTextareas(): void {
+  aside.querySelectorAll('textarea').forEach((el) => autosizeTextarea(el as HTMLTextAreaElement));
+}
+
+// 输入时即时增高；缩到合适高度由 autosizeTextarea 自动收敛
+aside.addEventListener('input', (e) => {
+  const ta = e.target as HTMLElement | null;
+  if (ta instanceof HTMLTextAreaElement) autosizeTextarea(ta);
+});
+
+/** 执行状态选项：空 key = 未执行（默认，画布/大纲不展示） */
+const EXEC_OPTIONS: Array<{ key: '' | ExecStatus; label: string }> = [
+  { key: '', label: '未执行' },
+  { key: 'pass', label: '✓ 通过' },
+  { key: 'blocked', label: '⏸ 阻塞' },
+  { key: 'fail', label: '✗ 失败' },
+];
 
 function renderPanel(): void {
   if (!selected) {
@@ -943,15 +1097,35 @@ function renderPanel(): void {
           : '';
   aside.innerHTML = `
     <div class="panel-head">
-      <div class="node-title" style="display:flex;align-items:center">${iconHtml}${escapeHtml(node.text)}</div>
-      <div style="font-size:11px;color:#94a3b8;margin-top:3px">${typeLabel} · ${node.id}</div>
+      <div class="node-title-row">
+        <div class="node-title" title="${escapeHtml(node.text)}">${iconHtml}<span class="title-text" id="panel-title-text">${escapeHtml(node.text)}</span></div>
+        <button class="copy-btn" id="copy-node-title" title="复制节点名称" aria-label="复制节点名称">${COPY_ICON}</button>
+      </div>
+      <button class="title-toggle" id="panel-title-toggle" style="display:none">展开全文 ▾</button>
+      <div class="node-meta">
+        <span>${typeLabel}</span><span>·</span><span>编号</span>
+        <code class="node-id">${escapeHtml(node.id)}</code>
+        <button class="copy-btn small" id="copy-node-id" title="复制节点编号" aria-label="复制节点编号">${COPY_ICON}</button>
+      </div>
     </div>
     <div class="tabs">
-      <div class="tab ${panelTab === 'info' ? 'active' : ''}" data-tab="info">用例信息</div>
+      <div class="tab ${panelTab === 'info' ? 'active' : ''}" data-tab="info">节点信息</div>
       <div class="tab ${panelTab === 'anns' ? 'active' : ''}" data-tab="anns">批注${openCount ? `<span class="badge-count">${openCount}</span>` : ''}</div>
     </div>
     <div class="panel-body" id="panel-body"></div>
   `;
+  // 节点名称 / 唯一编号：一键复制
+  aside.querySelector('#copy-node-title')?.addEventListener('click', () => void copyText(node.text, '节点名称'));
+  aside.querySelector('#copy-node-id')?.addEventListener('click', () => void copyText(node.id, '节点编号'));
+  // 节点标题过长时折叠为 3 行，可展开全文（避免标题把面板正文挤没）
+  const titleTextEl = aside.querySelector<HTMLElement>('#panel-title-text');
+  const titleToggleEl = aside.querySelector<HTMLButtonElement>('#panel-title-toggle');
+  titleToggleEl?.addEventListener('click', () => {
+    if (!titleTextEl) return;
+    const expanded = titleTextEl.classList.toggle('expanded');
+    titleToggleEl.textContent = expanded ? '收起 ▴' : '展开全文 ▾';
+  });
+  refreshTitleOverflow();
   aside.querySelectorAll('.tab').forEach((t) =>
     t.addEventListener('click', () => {
       panelTab = (t as HTMLElement).dataset.tab as 'info' | 'anns';
@@ -961,7 +1135,20 @@ function renderPanel(): void {
   const body = document.getElementById('panel-body')!;
   if (panelTab === 'info') renderInfoForm(body, node);
   else renderAnnotations(body, node);
+  autosizePanelTextareas();
   syncOutlineToSelection();
+}
+
+/** 面板宽度变化后重新判断标题是否需要“展开全文” */
+function refreshTitleOverflow(): void {
+  const t = aside.querySelector<HTMLElement>('#panel-title-text');
+  const btn = aside.querySelector<HTMLButtonElement>('#panel-title-toggle');
+  if (!t || !btn) return;
+  if (t.classList.contains('expanded')) {
+    btn.style.display = 'inline-block';
+    return;
+  }
+  btn.style.display = t.scrollHeight > t.clientHeight + 1 ? 'inline-block' : 'none';
 }
 
 function renderInfoForm(body: HTMLElement, node: MindNode): void {
@@ -969,13 +1156,21 @@ function renderInfoForm(body: HTMLElement, node: MindNode): void {
   if (isCase) {
     const p = node.props as CaseProps;
     body.innerHTML = `
-      <div class="field" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="field" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px">
         <div>
           <label>优先级</label>
           <select id="f-priority">
             <option value="">未设置</option>
-            ${['P0', 'P1', 'P2', 'P3'].map((x) => `<option ${p.priority === x ? 'selected' : ''}>${x}</option>`).join('')}
+            ${['P0', 'P1', 'P2', 'P3']
+              .map(
+                (x) =>
+                  `<option ${p.priority === x ? 'selected' : ''} title="${escapeHtml(PRIORITY_SPECS[x as keyof typeof PRIORITY_SPECS].definition)}">${x}</option>`,
+              )
+              .join('')}
           </select>
+          <div class="priority-hint" id="f-priority-hint" style="margin-top:4px;font-size:10.5px;line-height:1.4;color:#94a3b8">
+            ${p.priority && PRIORITY_SPECS[p.priority] ? escapeHtml(PRIORITY_SPECS[p.priority].execution) : '未设置：不参与按优先级的发布/回归筛选'}
+          </div>
         </div>
         <div>
           <label>用例类型</label>
@@ -983,6 +1178,22 @@ function renderInfoForm(body: HTMLElement, node: MindNode): void {
             <option value="">未设置</option>
             ${CASE_TYPES.map((t) => `<option value="${t.key}" ${p.caseType === t.key ? 'selected' : ''}>${t.label}</option>`).join('')}
           </select>
+        </div>
+        <div>
+          <label>测试层级</label>
+          <select id="f-testlevel">
+            <option value="">未设置</option>
+            ${TEST_LEVELS.map((level) => `<option value="${level.key}" ${p.testLevel === level.key ? 'selected' : ''}>${level.label}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>执行状态</label>
+        <div class="exec-row" id="f-exec">
+          ${EXEC_OPTIONS.map(
+            (o) =>
+              `<button type="button" class="exec-chip${o.key ? ` exec-${o.key}` : ''}${(p.exec ?? '') === o.key ? ' active' : ''}" data-exec="${o.key}">${o.label}</button>`,
+          ).join('')}
         </div>
       </div>
       <div class="field">
@@ -1012,6 +1223,21 @@ function renderInfoForm(body: HTMLElement, node: MindNode): void {
       const ta = document.createElement('textarea');
       ta.setAttribute('data-step', '');
       document.getElementById('steps-list')!.appendChild(ta);
+      autosizeTextarea(ta);
+      ta.focus();
+    });
+    // 执行状态：点击即标记（立即反映到画布/大纲，不走「保存」流程）
+    body.querySelectorAll<HTMLButtonElement>('[data-exec]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        const key = (btn.dataset.exec ?? '') as '' | ExecStatus;
+        setNodeExec(node.id, key || undefined);
+      }),
+    );
+    // 优先级提示：随选择更新（展示该等级的执行/发布要求）
+    document.getElementById('f-priority')?.addEventListener('change', (e) => {
+      const value = (e.target as HTMLSelectElement).value as keyof typeof PRIORITY_SPECS | '';
+      const hint = document.getElementById('f-priority-hint');
+      if (hint) hint.textContent = value && PRIORITY_SPECS[value] ? PRIORITY_SPECS[value].execution : '未设置：不参与按优先级的发布/回归筛选';
     });
     document.getElementById('btn-save-case')?.addEventListener('click', () => {
       const steps = [...body.querySelectorAll('textarea[data-step]')]
@@ -1019,11 +1245,13 @@ function renderInfoForm(body: HTMLElement, node: MindNode): void {
         .filter(Boolean);
       const priority = (document.getElementById('f-priority') as HTMLSelectElement).value;
       const caseType = (document.getElementById('f-casetype') as HTMLSelectElement).value;
+      const testLevel = (document.getElementById('f-testlevel') as HTMLSelectElement).value;
       snapshot();
       store.updateNode(node.id, {
         props: {
           priority: priority || undefined,
           caseType: caseType || undefined,
+          testLevel: testLevel || undefined,
           precondition: (document.getElementById('f-precondition') as HTMLTextAreaElement).value.trim() || undefined,
           steps: steps.length ? steps : undefined,
           expected: (document.getElementById('f-expected') as HTMLTextAreaElement).value.trim() || undefined,
@@ -1034,9 +1262,14 @@ function renderInfoForm(body: HTMLElement, node: MindNode): void {
       toast('已保存', 'success');
     });
   } else {
-    const note = String((node.props as { note?: string }).note ?? '');
+    const note = String((node.props as FolderProps).note ?? '');
+    const detail = String((node.props as FolderProps).detail ?? '');
     const leaf = registry.get(node.type).leafOnly === true;
     body.innerHTML = `
+      <div class="field">
+        <label>详情</label>
+        <textarea id="f-detail" style="min-height:96px" placeholder="长文本放这里：背景说明、数据清单、参考链接等；节点标题保持简短">${escapeHtml(detail)}</textarea>
+      </div>
       <div class="field">
         <label>备注</label>
         <textarea id="f-note">${escapeHtml(note)}</textarea>
@@ -1057,9 +1290,13 @@ function renderInfoForm(body: HTMLElement, node: MindNode): void {
     document.getElementById('btn-save-folder')?.addEventListener('click', () => {
       snapshot();
       store.updateNode(node.id, {
-        props: { note: (document.getElementById('f-note') as HTMLTextAreaElement).value.trim() || undefined },
+        props: {
+          detail: (document.getElementById('f-detail') as HTMLTextAreaElement).value.trim() || undefined,
+          note: (document.getElementById('f-note') as HTMLTextAreaElement).value.trim() || undefined,
+        },
       });
       relayout();
+      toast('已保存', 'success');
     });
     document.getElementById('pa-add-folder')?.addEventListener('click', () => {
       snapshot();
@@ -1115,12 +1352,86 @@ function renderAnnotations(body: HTMLElement, node: MindNode): void {
   );
 }
 
-// ---------- 统计面板（点击顶栏 stats 弹出） ----------
+// ---------- 统计概览（左上角浮层：工具条「概览」/ 顶栏 stats 开关） ----------
 let statsPopover: HTMLDivElement | null = null;
+
+const PRIORITY_STATS: Array<{ key: string; label: string; color: string }> = [
+  { key: 'P0', label: 'P0', color: '#dc2626' },
+  { key: 'P1', label: 'P1', color: '#ea580c' },
+  { key: 'P2', label: 'P2', color: '#2563eb' },
+  { key: 'P3', label: 'P3', color: '#94a3b8' },
+  { key: '', label: '未设置', color: '#cbd5e1' },
+];
+const EXEC_STATS: Array<{ key: string; label: string; color: string }> = [
+  { key: 'pass', label: '通过', color: '#16a34a' },
+  { key: 'blocked', label: '阻塞', color: '#eab308' },
+  { key: 'fail', label: '失败', color: '#dc2626' },
+  { key: '', label: '未执行', color: '#94a3b8' },
+];
+
+/** 统计当前文档：节点数 / 用例数 / 优先级分布 / 执行状态分布 */
+function computeOverview(): {
+  totalNodes: number;
+  cases: MindNode[];
+  priority: Map<string, number>;
+  exec: Map<string, number>;
+  executed: number;
+} {
+  const cases: MindNode[] = [];
+  let totalNodes = 0;
+  const walk = (n: MindNode): void => {
+    totalNodes++;
+    if (n.type === 'case') cases.push(n);
+    for (const c of n.children ?? []) walk(c);
+  };
+  walk(store.root);
+  const priority = new Map<string, number>();
+  const exec = new Map<string, number>();
+  let executed = 0;
+  for (const c of cases) {
+    const pr = String((c.props as { priority?: string }).priority ?? '');
+    priority.set(pr, (priority.get(pr) ?? 0) + 1);
+    const ex = String((c.props as { exec?: string }).exec ?? '');
+    exec.set(ex, (exec.get(ex) ?? 0) + 1);
+    if (ex === 'pass' || ex === 'fail' || ex === 'blocked') executed++;
+  }
+  return { totalNodes, cases, priority, exec, executed };
+}
+
+function overviewBodyHtml(): string {
+  const { totalNodes, cases, priority, exec, executed } = computeOverview();
+  const chips = (items: Array<{ key: string; label: string; color: string }>, counts: Map<string, number>): string =>
+    items
+      .map(
+        (it) =>
+          `<span class="ov-chip"><i style="background:${it.color}"></i>${it.label}<b>${(counts.get(it.key) ?? 0).toLocaleString()}</b></span>`,
+      )
+      .join('');
+  const pct = cases.length ? Math.round((executed / cases.length) * 100) : 0;
+  return `
+    <div class="ov-tiles">
+      <div class="ov-tile"><b>${totalNodes.toLocaleString()}</b><span>节点总数</span></div>
+      <div class="ov-tile"><b>${cases.length.toLocaleString()}</b><span>用例数</span></div>
+    </div>
+    <div class="ov-group-title">按优先级</div>
+    <div class="ov-chips">${chips(PRIORITY_STATS, priority)}</div>
+    <div class="ov-group-title">按执行状态</div>
+    <div class="ov-chips">${chips(EXEC_STATS, exec)}</div>
+    ${cases.length ? `<div class="ov-progress">已执行 ${executed.toLocaleString()} / ${cases.length.toLocaleString()}（${pct}%）</div>` : ''}
+  `;
+}
+
+/** 数据变化（relayout）后，若概览面板打开则实时刷新 */
+function refreshStatsIfOpen(): void {
+  if (!statsPopover) return;
+  const body = statsPopover.querySelector('#ov-body');
+  if (body) body.innerHTML = overviewBodyHtml();
+}
 
 function closeStatsPopover(): void {
   statsPopover?.remove();
   statsPopover = null;
+  document.getElementById('btn-overview')?.classList.remove('active');
 }
 
 function openStatsPopover(): void {
@@ -1128,82 +1439,36 @@ function openStatsPopover(): void {
     closeStatsPopover();
     return;
   }
-  const cases: MindNode[] = [];
-  const walk = (n: MindNode): void => {
-    if (n.type === 'case') cases.push(n);
-    for (const c of n.children ?? []) walk(c);
-  };
-  walk(store.root);
-
-  const countBy = (get: (n: MindNode) => string): string => {
-    const m = new Map<string, number>();
-    for (const c of cases) {
-      const k = get(c) || '未设置';
-      m.set(k, (m.get(k) ?? 0) + 1);
-    }
-    return [...m.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([k, v]) => `<span style="display:inline-flex;align-items:center;gap:4px;margin:2px 8px 2px 0"><b style="color:#1e293b">${v}</b><span style="color:#64748b">${escapeHtml(k)}</span></span>`)
-      .join('') || '<span style="color:#cbd5e1">—</span>';
-  };
-
-  const total = countNodes(store.root) - 1;
-  const exec = cases.filter((c) => (c.props as { exec?: string }).exec);
-  const passed = cases.filter((c) => (c.props as { exec?: string }).exec === 'pass').length;
-  const failed = cases.filter((c) => (c.props as { exec?: string }).exec === 'fail').length;
-  const blocked = cases.filter((c) => (c.props as { exec?: string }).exec === 'blocked').length;
-
-  const popover = document.createElement('div');
-  popover.style.cssText =
-    'position:fixed;top:74px;left:16px;z-index:900;width:380px;max-width:92vw;background:#fff;border:1px solid #e2e8f0;border-radius:14px;box-shadow:0 16px 60px rgba(15,23,42,0.18);padding:18px 20px;font-size:12.5px';
-  popover.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <b style="font-size:14px;color:#1e293b">用例统计</b>
-      <button id="stats-close" style="border:none;background:transparent;cursor:pointer;color:#94a3b8;font-size:14px">✕</button>
+  const wrap = document.getElementById('canvas-wrap') as HTMLElement;
+  const card = document.createElement('div');
+  card.className = 'overview-card';
+  card.innerHTML = `
+    <div class="ov-header">
+      <span class="ov-title">统计概览</span>
+      <button class="ov-close" id="stats-close" title="关闭">✕</button>
     </div>
-    <div style="display:flex;gap:8px;margin-bottom:14px">
-      <div style="flex:1;background:#f8fafc;border-radius:10px;padding:10px;text-align:center">
-        <div style="font-size:20px;font-weight:700;color:#1e293b">${cases.length.toLocaleString()}</div>
-        <div style="font-size:11px;color:#94a3b8">用例总数</div>
-      </div>
-      <div style="flex:1;background:#f8fafc;border-radius:10px;padding:10px;text-align:center">
-        <div style="font-size:20px;font-weight:700;color:#16a34a">${passed}</div>
-        <div style="font-size:11px;color:#94a3b8">通过</div>
-      </div>
-      <div style="flex:1;background:#f8fafc;border-radius:10px;padding:10px;text-align:center">
-        <div style="font-size:20px;font-weight:700;color:#dc2626">${failed}</div>
-        <div style="font-size:11px;color:#94a3b8">失败</div>
-      </div>
-      <div style="flex:1;background:#f8fafc;border-radius:10px;padding:10px;text-align:center">
-        <div style="font-size:20px;font-weight:700;color:#ea580c">${blocked}</div>
-        <div style="font-size:11px;color:#94a3b8">阻塞</div>
-      </div>
-    </div>
-    ${exec.length ? `<div style="margin-bottom:10px;font-size:11.5px;color:#64748b">执行进度：${exec.length} / ${cases.length}（${Math.round((exec.length / Math.max(1, cases.length)) * 100)}%）</div>` : ''}
-    <div style="margin-bottom:8px"><span style="color:#94a3b8">按优先级</span></div>
-    <div style="margin-bottom:12px">${countBy((n) => String((n.props as { priority?: string }).priority ?? ''))}</div>
-    <div style="margin-bottom:8px"><span style="color:#94a3b8">按用例类型</span></div>
-    <div style="margin-bottom:12px">${countBy((n) => String((n.props as { caseType?: string }).caseType ?? ''))}</div>
-    <div style="margin-bottom:8px"><span style="color:#94a3b8">按所属维度（一级分支）</span></div>
-    <div>${countBy((n) => {
-      let cur = store.getParent(n.id);
-      while (cur && store.getParent(cur.id)) cur = store.getParent(cur.id)!;
-      return cur?.text ?? '';
-    })}</div>
-    <div style="margin-top:12px;font-size:11px;color:#cbd5e1">导图总节点 ${total.toLocaleString()}</div>
+    <div id="ov-body"></div>
   `;
-  document.body.appendChild(popover);
-  statsPopover = popover;
-  popover.querySelector('#stats-close')?.addEventListener('click', closeStatsPopover);
+  wrap.appendChild(card);
+  statsPopover = card;
+  card.querySelector('#ov-body')!.innerHTML = overviewBodyHtml();
+  card.querySelector('#stats-close')?.addEventListener('click', closeStatsPopover);
+  document.getElementById('btn-overview')?.classList.add('active');
 }
 
-// 顶栏 stats 可点击
+// 工具条「概览」按钮 + 顶栏 stats 均可开关统计面板
+document.getElementById('btn-overview')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  openStatsPopover();
+});
 document.getElementById('stats')?.addEventListener('click', openStatsPopover);
-// 点外部关闭
+// 点面板外关闭
 window.addEventListener('pointerdown', (e) => {
-  if (statsPopover && !statsPopover.contains(e.target as Node) && (e.target as HTMLElement).id !== 'stats') {
-    closeStatsPopover();
-  }
+  if (!statsPopover) return;
+  if (statsPopover.contains(e.target as Node)) return;
+  const t = e.target as HTMLElement;
+  if (t.id === 'stats' || t.closest('#btn-overview')) return;
+  closeStatsPopover();
 });
 
 function threadHtml(a: {
@@ -1259,13 +1524,15 @@ function outlineHtml(): string {
       : '';
     const badge = priority && depth > 0 ? `<span class="o-badge" style="font-size:10px;background:#e2e8f0;border-radius:4px;padding:1px 5px;margin-left:6px;color:#475569">${escapeHtml(priority)}</span>` : '';
     const exec = String((n.props as { exec?: string }).exec ?? '');
-    const EXEC_MARKS: Record<string, { mark: string; color: string; label: string }> = {
-      pass: { mark: '✓', color: '#16a34a', label: '通过' },
-      fail: { mark: '✗', color: '#dc2626', label: '失败' },
-      blocked: { mark: '⏸', color: '#ea580c', label: '阻塞' },
+    // 执行状态：文字 + 彩色胶囊（通过绿 / 阻塞黄 / 失败红）；未执行不展示
+    const EXEC_STYLES: Record<string, { label: string; bg: string; border: string; color: string }> = {
+      pass: { label: '通过', bg: '#dcfce7', border: '#16a34a', color: '#15803d' },
+      blocked: { label: '阻塞', bg: '#fef9c3', border: '#eab308', color: '#a16207' },
+      fail: { label: '失败', bg: '#fee2e2', border: '#dc2626', color: '#b91c1c' },
     };
-    const execBadge = exec && EXEC_MARKS[exec] && n.type === 'case'
-      ? `<span class="o-exec" data-exec="${exec}" title="执行：${EXEC_MARKS[exec]!.label}" style="font-size:11px;font-weight:700;color:${EXEC_MARKS[exec]!.color};margin-left:6px;user-select:none">${EXEC_MARKS[exec]!.mark}</span>`
+    const execInfo = exec && n.type === 'case' ? EXEC_STYLES[exec] : undefined;
+    const execBadge = execInfo
+      ? `<span class="o-exec" data-exec="${exec}" title="执行状态：${execInfo.label}" style="display:inline-block;flex-shrink:0;font-size:10px;font-weight:600;line-height:16px;padding:0 6px;border-radius:999px;background:${execInfo.bg};border:1px solid ${execInfo.border};color:${execInfo.color};margin-left:6px;user-select:none">${execInfo.label}</span>`
       : '';
     const selCls = selected?.id === n.id ? 'o-sel' : '';
     return `
@@ -1598,7 +1865,9 @@ ioMenuEl.querySelectorAll('.item[data-io]').forEach((el) => {
 // ---------- 工具条 ----------
 document.getElementById('btn-undo')?.addEventListener('click', undo);
 document.getElementById('btn-redo')?.addEventListener('click', redo);
-document.getElementById('btn-expand-all')?.addEventListener('click', () => {
+
+/** 一键全部展开 */
+function expandAllNodes(): void {
   const all = new Set<string>();
   const walk = (n: MindNode): void => {
     if (n.children?.length) {
@@ -1610,12 +1879,112 @@ document.getElementById('btn-expand-all')?.addEventListener('click', () => {
   expandedIds = all.size ? all : null;
   relayout();
   renderer.focusNode(store.root.id);
-});
-document.getElementById('btn-collapse-all')?.addEventListener('click', () => {
+}
+
+/** 一键全部折叠（只留根节点展开） */
+function collapseAllNodes(): void {
   expandedIds = new Set([store.root.id]);
   relayout();
   renderer.focusNode(store.root.id);
+}
+
+/** 一键默认展开：清除该文档记住的展开状态，按「默认展开层级」重新展开 */
+function applyDefaultExpand(): void {
+  expandedIds = null;
+  if (currentDocId) localStorage.removeItem(LS_EXPANDED + ':' + currentDocId);
+  relayout();
+  renderer.focusNode(store.root.id);
+  toast(`已按默认层级展开（${expandDepthLabel()}）`, 'info');
+}
+
+document.getElementById('btn-expand-all')?.addEventListener('click', expandAllNodes);
+document.getElementById('btn-collapse-all')?.addEventListener('click', collapseAllNodes);
+document.getElementById('btn-default-expand')?.addEventListener('click', applyDefaultExpand);
+
+// ---------- 展开设置（默认展开层级） ----------
+const expandMenuEl = document.getElementById('expand-menu') as HTMLDivElement | null;
+const expandSettingsBtn = document.getElementById('btn-expand-settings') as HTMLButtonElement | null;
+const defaultExpandBtn = document.getElementById('btn-default-expand') as HTMLButtonElement | null;
+const EXPAND_DEPTH_OPTIONS: Array<{ key: ExpandDepth; label: string; hint?: string }> = [
+  { key: 1, label: '1 层', hint: '仅一级子节点' },
+  { key: 2, label: '2 层', hint: '默认' },
+  { key: 3, label: '3 层' },
+  { key: 'all', label: '全部', hint: '全部展开' },
+];
+
+function syncExpandButtons(): void {
+  if (defaultExpandBtn) defaultExpandBtn.title = `按默认层级展开（当前：${expandDepthLabel()}）`;
+  if (expandSettingsBtn) expandSettingsBtn.title = `展开设置：默认展开层级（当前：${expandDepthLabel()}）`;
+}
+
+function hideExpandMenu(): void {
+  if (expandMenuEl) expandMenuEl.style.display = 'none';
+}
+
+function renderExpandMenu(): void {
+  if (!expandMenuEl) return;
+  expandMenuEl.innerHTML = `
+    <div class="io-group">默认展开层级</div>
+    ${EXPAND_DEPTH_OPTIONS.map(
+      (o) => `<div class="item" data-expand-depth="${o.key}">
+        <span>${o.label}${o.hint ? `<span style="color:#cbd5e1;font-size:11px;margin-left:6px">${o.hint}</span>` : ''}</span>
+        <span class="check" style="color:#2563eb;font-weight:700;min-width:12px;text-align:right">${o.key === defaultExpandDepth ? '✓' : ''}</span>
+      </div>`,
+    ).join('')}
+    <div class="divider"></div>
+    <div class="io-group">展开操作</div>
+    <div class="item" data-expand-action="all"><span>⇱ 全部展开</span></div>
+    <div class="item" data-expand-action="collapse"><span>⇲ 全部折叠</span></div>
+    <div class="item" data-expand-action="default"><span>⟲ 默认展开</span><span class="kbd">${expandDepthLabel()}</span></div>
+  `;
+  expandMenuEl.querySelectorAll('[data-expand-depth]').forEach((el) =>
+    el.addEventListener('click', () => {
+      defaultExpandDepth = normalizeExpandDepth(el.getAttribute('data-expand-depth'));
+      localStorage.setItem(EXPAND_DEPTH_KEY, String(defaultExpandDepth));
+      // 立即应用：清掉当前文档的自定义展开状态，按新层级重排
+      expandedIds = null;
+      if (currentDocId) localStorage.removeItem(LS_EXPANDED + ':' + currentDocId);
+      relayout();
+      renderer.focusNode(store.root.id);
+      syncExpandButtons();
+      hideExpandMenu();
+      toast(`默认展开层级已设为「${expandDepthLabel()}」`, 'success');
+    }),
+  );
+  expandMenuEl.querySelectorAll('[data-expand-action]').forEach((el) =>
+    el.addEventListener('click', () => {
+      const action = el.getAttribute('data-expand-action');
+      hideExpandMenu();
+      if (action === 'all') expandAllNodes();
+      else if (action === 'collapse') collapseAllNodes();
+      else applyDefaultExpand();
+    }),
+  );
+}
+
+function showExpandMenu(): void {
+  if (!expandMenuEl || !expandSettingsBtn) return;
+  const r = expandSettingsBtn.getBoundingClientRect();
+  renderExpandMenu();
+  expandMenuEl.style.display = 'block';
+  const menuW = expandMenuEl.offsetWidth;
+  expandMenuEl.style.top = `${Math.round(r.bottom + 6)}px`;
+  expandMenuEl.style.left = `${Math.round(Math.max(8, Math.min(window.innerWidth - menuW - 8, r.right - menuW)))}px`;
+}
+
+expandSettingsBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!expandMenuEl) return;
+  if (expandMenuEl.style.display === 'block') hideExpandMenu();
+  else showExpandMenu();
 });
+window.addEventListener('pointerdown', (e) => {
+  if (!expandMenuEl || expandMenuEl.style.display !== 'block') return;
+  if (expandMenuEl.contains(e.target as Node) || e.target === expandSettingsBtn) return;
+  hideExpandMenu();
+});
+syncExpandButtons();
+
 document.getElementById('btn-add-case')?.addEventListener('click', () => {
   if (!selected) {
     toast('先选中一个节点', 'info');
@@ -1767,19 +2136,16 @@ window.addEventListener('beforeunload', () => {
 });
 
 // ---------- 桥接服务（实时协作） ----------
-const BRIDGE_URL = (localStorage.getItem('ai-mind-map:bridge') ?? 'http://localhost:47214').replace(/\/$/, '');
+// bridge 地址优先级：localStorage 覆盖 > 构建期注入（Docker/静态部署）> 本地默认
+const BRIDGE_URL = (
+  localStorage.getItem('ai-mind-map:bridge') ??
+  __AI_MIND_MAP_BRIDGE_URL__ ??
+  'http://localhost:47214'
+).replace(/\/$/, '');
 /** 按文档记录的最近推送时间（回声抑制，多文档模式下按 remoteId 区分） */
 const lastPushAtByRemote = new Map<string, number>();
 /** true = bridge 已确认为多文档模式（GET /docs 可用） */
 let bridgeMultiDoc = false;
-
-interface BridgeDocInfo {
-  id: string;
-  title: string;
-  updatedAt: string;
-  nodeCount: number;
-  active: boolean;
-}
 
 /** 当前打开文档对应的索引条目 */
 function currentEntry(): DocEntry | null {
@@ -1817,52 +2183,32 @@ async function pullRemote(docId?: string): Promise<void> {
 }
 
 interface BridgeDocsResponse {
-  docs: Array<{ id: string; title: string; updatedAt: string; nodeCount: number }>;
+  docs: BridgeDocInfo[];
 }
 
 /**
- * 把 bridge 的文档列表合并进本地索引：
+ * 把 bridge 的文档列表合并进本地索引（bridge 为权威）：
  * - 按 remoteId 匹配 → 更新标题/时间/节点数
- * - bridge 侧新文档 → 新建索引条目（remoteOnly，内容首次打开时才拉取）
- * - 本地独有条目不动
+ * - bridge 侧新文档 → 优先与同标题、尚未挂载的本地草稿绑定，否则创建待拉取条目
+ * - bridge 侧已删除 → 删除同一文件的本地持久化副本，不得解绑成另一篇文档
+ * - 同一 remoteId 只保留一张卡片（优先有本地内容的）
  */
 async function syncDocsFromBridge(): Promise<void> {
   try {
     const res = await fetch(`${BRIDGE_URL}/docs`);
     if (!res.ok) return;
-    const body = (await res.json()) as { docs: Array<{ id: string; title: string; updatedAt: string; nodeCount: number }> };
-    const entries = loadDocsIndex();
-    let changed = false;
-    for (const bd of body.docs) {
-      const existing = entries.find((e) => e.remoteId === bd.id);
-      if (existing) {
-        if (existing.title !== bd.title) {
-          existing.title = bd.title;
-          changed = true;
+    const body = (await res.json()) as BridgeDocsResponse;
+    const reconciled = reconcileDocsIndex(loadDocsIndex(), body.docs);
+    if (reconciled.changed) {
+      for (const id of reconciled.removedLocalIds) {
+        localStorage.removeItem(DOC_PREFIX + id);
+        localStorage.removeItem(`${LS_EXPANDED}:${id}`);
+        if (currentDocId === id) {
+          currentDocId = null;
+          localStorage.removeItem(LAST_DOC_KEY);
         }
-        const t = Date.parse(bd.updatedAt) || Date.now();
-        if (Math.abs(existing.updatedAt - t) > 1500) {
-          existing.updatedAt = t;
-          changed = true;
-        }
-        if (bd.nodeCount !== undefined && existing.nodeCount !== bd.nodeCount) {
-          existing.nodeCount = bd.nodeCount;
-          changed = true;
-        }
-      } else {
-        entries.unshift({
-          id: 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-          remoteId: bd.id,
-          title: bd.title,
-          updatedAt: Date.parse(bd.updatedAt) || Date.now(),
-          nodeCount: bd.nodeCount,
-          remoteOnly: true,
-        });
-        changed = true;
       }
-    }
-    if (changed) {
-      saveDocsIndex(entries);
+      saveDocsIndex(reconciled.entries);
       // 首页可见时刷新列表
       const home = document.getElementById('home-view');
       if (home && home.style.display !== 'none') renderHome();
@@ -1920,37 +2266,78 @@ function connectBridge(): void {
   void detectBridgeMode(); // 启动时也探测一次（覆盖 SSE 已被缓存/代理的场景）
 }
 
-/** 浏览器侧保存：确保当前文档已在 bridge 注册（拿 remoteId），写回 /doc/:id */
-async function ensureRemoteDoc(): Promise<string | null> {
-  const entry = currentEntry();
-  if (entry?.remoteId) return entry.remoteId;
-  try {
-    const res = await fetch(`${BRIDGE_URL}/docs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: store.document.meta.title || '未命名导图' }),
-    });
-    if (!res.ok) return null;
-    const r = (await res.json()) as { id: string };
-    if (entry) {
-      entry.remoteId = r.id;
-      saveDocsIndex(loadDocsIndex().map((e) => (e.id === entry.id ? entry : e)));
+/** 同一文档并发“首次挂载”时复用同一个请求，避免各建一份 bridge 文档 */
+const remoteMounts = new Map<string, Promise<string | null>>();
+
+/**
+ * 浏览器侧保存：确保指定文档已在 bridge 注册并返回 remoteId。
+ * 首次挂载用 `web-<本地文档id>` 作为稳定 id，页面重载/并发保存都不会重复新建文档。
+ */
+async function ensureRemoteDoc(docId: string, title: string): Promise<string | null> {
+  const entry = loadDocsIndex().find((e) => e.id === docId);
+  if (!entry) return null; // 索引外的临时文档不推送，避免生成孤儿文档
+  if (entry.remoteId) return entry.remoteId;
+  const inflight = remoteMounts.get(docId);
+  if (inflight) return inflight;
+  const stableId = `web-${docId}`;
+  // 先落 remoteId 再请求：即便随后刷新/并发，也不会再新建第二份
+  entry.remoteId = stableId;
+  saveDocsIndex(loadDocsIndex().map((e) => (e.id === docId ? entry : e)));
+  const mount = (async (): Promise<string | null> => {
+    try {
+      const res = await fetch(`${BRIDGE_URL}/docs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, id: stableId }),
+      });
+      if (!res.ok) {
+        rollbackRemoteId(docId, stableId);
+        return null;
+      }
+      const r = (await res.json()) as { id: string };
+      if (r.id !== stableId) {
+        // 旧版 bridge 不认识指定 id，回填它实际分配的 id
+        const cur = loadDocsIndex().find((e) => e.id === docId);
+        if (cur) {
+          cur.remoteId = r.id;
+          saveDocsIndex(loadDocsIndex().map((e) => (e.id === docId ? cur : e)));
+        }
+      }
+      return r.id;
+    } catch {
+      rollbackRemoteId(docId, stableId);
+      return null;
+    } finally {
+      remoteMounts.delete(docId);
     }
-    return r.id;
-  } catch {
-    return null;
+  })();
+  remoteMounts.set(docId, mount);
+  return mount;
+}
+
+/** 首次挂载失败时回滚临时 remoteId（旧版单文件 bridge 会走 /doc 兼容端点） */
+function rollbackRemoteId(docId: string, stableId: string): void {
+  const cur = loadDocsIndex().find((e) => e.id === docId);
+  if (cur && cur.remoteId === stableId) {
+    delete cur.remoteId;
+    saveDocsIndex(loadDocsIndex().map((e) => (e.id === docId ? cur : e)));
   }
 }
 
 async function pushRemote(): Promise<void> {
+  const senderId = currentDocId;
+  if (!senderId) return;
+  // 先快照内容与标题：await 期间用户可能切走文档，不能把 B 的内容写进 A 的 bridge 文档
+  const payload = JSON.stringify(doc);
+  const title = store.document.meta.title || '未命名导图';
   try {
-    const rid = await ensureRemoteDoc();
+    const rid = await ensureRemoteDoc(senderId, title);
     if (rid) {
       lastPushAtByRemote.set(rid, Date.now());
       await fetch(`${BRIDGE_URL}/doc/${encodeURIComponent(rid)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(doc),
+        body: payload,
       });
     } else {
       // 遗留单文档 bridge（POST /docs 400/404）：写 /doc 兼容端点
@@ -1958,7 +2345,7 @@ async function pushRemote(): Promise<void> {
       await fetch(`${BRIDGE_URL}/doc`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(doc),
+        body: payload,
       });
     }
   } catch {
@@ -1967,18 +2354,6 @@ async function pushRemote(): Promise<void> {
 }
 
 // ---------- 多文档管理 ----------
-interface DocEntry {
-  id: string;
-  title: string;
-  updatedAt: number;
-  /** bridge 侧文档 id（多文档模式；首次推送/同步时挂上） */
-  remoteId?: string;
-  /** bridge 报告的节点数（remoteOnly 卡片展示用，无需先拉内容） */
-  nodeCount?: number;
-  /** 内容尚未拉到本地槽位（bridge 侧新建/吸收的文档） */
-  remoteOnly?: boolean;
-}
-
 const DOCS_INDEX_KEY = 'ai-mind-map:docs'; // 索引：[{id,title,updatedAt}]
 const DOC_PREFIX = 'ai-mind-map:doc:';      // 每文档数据键
 const LAST_DOC_KEY = 'ai-mind-map:last-doc';
@@ -2006,9 +2381,26 @@ function touchDocEntry(id: string, title: string): void {
   }
 }
 
-function deleteDoc(id: string): void {
+/**
+ * 删除文档：先删本地槽位与索引；若已挂到 bridge，再删 bridge 侧文件（--dir 模式），
+ * 否则下次同步会把卡片重新拉回来。
+ */
+async function deleteDoc(id: string): Promise<void> {
+  const entry = loadDocsIndex().find((x) => x.id === id);
   localStorage.removeItem(DOC_PREFIX + id);
   saveDocsIndex(loadDocsIndex().filter((x) => x.id !== id));
+  if (currentDocId === id) {
+    currentDocId = null;
+    localStorage.removeItem(LAST_DOC_KEY);
+  }
+  const rid = entry?.remoteId;
+  if (rid) {
+    try {
+      await fetch(`${BRIDGE_URL}/doc/${encodeURIComponent(rid)}`, { method: 'DELETE' });
+    } catch {
+      /* bridge 未启动 / 旧 bridge 不支持删除：本地已删，下次同步会再出现，可忽略 */
+    }
+  }
 }
 
 // ---------- 启动 ----------
@@ -2268,8 +2660,7 @@ function renderHome(): void {
       const id = (el as HTMLElement).dataset.delete!;
       const cur = loadDocsIndex().find((x) => x.id === id);
       if (confirm(`删除「${cur?.title ?? '未命名'}」？删除后不可恢复。`)) {
-        deleteDoc(id);
-        renderHome();
+        void deleteDoc(id).then(() => renderHome());
       }
     }),
   );
@@ -2280,6 +2671,7 @@ function showHome(show: boolean): void {
   const home = document.getElementById('home-view') as HTMLDivElement;
   home.style.display = show ? 'block' : 'none';
   if (!show) return;
+  closeStatsPopover();
   persistCurrent();
   renderHome();
 }
@@ -2689,8 +3081,9 @@ async function sendAiMessage(): Promise<void> {
   aiSendBtn.disabled = true;
 
   try {
-    // 当前文档先确保已在 bridge 注册；AI 会话默认作用于当前文档（docId 定向）
-    const rid = await ensureRemoteDoc();
+    // 当前文档先确保已在 bridge 注册并同步内容；AI 会话默认作用于当前文档（docId 定向）
+    await pushRemote();
+    const rid = currentDocId ? (loadDocsIndex().find((e) => e.id === currentDocId)?.remoteId ?? null) : null;
     const res = await fetch(`${BRIDGE_URL}/ai/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

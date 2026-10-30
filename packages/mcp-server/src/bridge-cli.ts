@@ -19,19 +19,22 @@ const { values } = parseArgs({
     file: { type: 'string' },
     dir: { type: 'string' },
     port: { type: 'string', default: '47214' },
-    model: { type: 'string', default: 'claude-opus-5-5' },
+    model: { type: 'string', default: process.env.MODEL || 'claude-opus-5-5' },
   },
 });
 
 const registry = createRegistry();
 let handle;
 
+// 监听地址：默认仅本机回环（本地开发的安全默认）；容器部署设置 BRIDGE_HOST=0.0.0.0
+const bridgeHost = process.env.BRIDGE_HOST || '127.0.0.1';
+
 if (values.dir) {
   const dir = resolve(values.dir);
   mkdirSync(dir, { recursive: true });
   const docs = new DirDocManager(registry, dir);
-  handle = startBridge({ docs, registry, port: Number(values.port), model: values.model });
-  console.log(`[ai-mind-map bridge] http://localhost:${values.port}  (dir: ${dir})`);
+  handle = startBridge({ docs, registry, port: Number(values.port), host: bridgeHost, model: values.model });
+  console.log(`[ai-mind-map bridge] http://${bridgeHost}:${values.port}  (dir: ${dir})`);
 } else {
   const fp = values.file ?? './testcases.mindmap.json';
   let store = loadOrCreate(fp, registry);
@@ -43,9 +46,10 @@ if (values.dir) {
     registry,
     filePath: fp,
     port: Number(values.port),
+    host: bridgeHost,
     model: values.model,
   });
-  console.log(`[ai-mind-map bridge] http://localhost:${values.port}  (file: ${resolve(fp)})  [单文档模式]`);
+  console.log(`[ai-mind-map bridge] http://${bridgeHost}:${values.port}  (file: ${resolve(fp)})  [单文档模式]`);
 }
 
 console.log('[ai-mind-map bridge] AI chat needs ANTHROPIC_API_KEY env (or run `ant auth login`)');

@@ -36,8 +36,9 @@ describe('templates', () => {
     const withDims = renderMethodPrompt(['functional', 'boundary']);
     expect(withDims).toContain('【功能测试】');
     expect(withDims).toContain('边界值分析');
-    expect(renderMethodPrompt([])).toContain('等价类划分');
-    expect(renderMethodPrompt(['nope'])).toContain('等价类划分');
+    expect(renderMethodPrompt([])).toContain('先从事实来源提取测试条件');
+    expect(renderMethodPrompt([])).toContain('不要机械套满');
+    expect(renderMethodPrompt(['nope'])).toContain('先从事实来源提取测试条件');
   });
 
   it('buildTemplateDoc 未知模板 id 回退空白', () => {

@@ -1,0 +1,12 @@
+interface:
+  display_name: "测试用例设计"
+  short_description: "分析、设计、补充、重组与评审可追溯的手工测试用例"
+  default_prompt: "使用 $test-case-designer 分析测试范围并设计可追溯的手工测试用例。"
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "ai-mind-map"
+      description: "读取和维护测试用例脑图"
+      transport: "stdio"
+policy:
+  allow_implicit_invocation: true

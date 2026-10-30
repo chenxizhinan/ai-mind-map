@@ -1,0 +1,12 @@
+node_modules
+**/node_modules
+apps/app/dist
+dist-server
+.git
+.github
+.agents
+mindmaps
+*.log
+.DS_Store
+docs
+scripts

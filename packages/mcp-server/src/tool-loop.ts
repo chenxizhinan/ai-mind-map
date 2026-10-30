@@ -6,6 +6,7 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import type { DocStore } from '@ai-mind-map/core';
+import { priorityRubricText } from '@ai-mind-map/core';
 import { registerTools } from './tools.js';
 import type { DocContext } from './doc-manager.js';
 
@@ -36,18 +37,25 @@ const SYSTEM_PROMPT = [
   '3. 批量建用例用 add_subtree 一次提交一棵完整子树（模块 folder 下挂 case 数组）。',
   '4. 激活文档的根节点 id 见 list_documents/create_document/open_document 返回的 rootId（新文档为 n_0001）；模块建完后用返回的 nodeId 继续挂用例。',
   '5. 修改完成后用 1-3 句话总结，不要输出大段 JSON。',
-  '6. 按功能模块组织 folder，叶子用 case，props 带优先级 P0-P3，覆盖正常流/边界/异常。',
-  '6a. 用例按 ISTQB 用例要素规范：标题 = [前置状态] + 执行动作 + 预期结果（动作写出步骤，',
+  '6. 先从事实来源提取测试条件、风险和判定依据；按执行入口、稳定业务能力或关键状态组织 folder，叶子用 case。',
+  '   不机械套满测试类型，不把树结构当作覆盖矩阵；交叉维度放标题、标签或备注。',
+  '6a. 用例标题表达一个主要测试目标：标题 = [前置状态] + 执行动作 + 主要结果（动作写出步骤，',
   '    "正确密码登录成功"缺动作不合格，"密码正确时点击登录按钮，跳转到工作台"合格）；',
-  '    props.precondition 写执行前状态；steps 每条一个动词开头的动作；expected 必须可观察可判定',
-  '    （页面跳转/提示文案/返回码），禁止"功能正常""符合预期"。',
+  '    props.precondition 写执行前状态，无前置时写"无"；steps 每条一个动词开头的动作；expected 是整条用例',
+  '    可观察、可判定的通过条件；多个断言可编号但必须共同证明同一目标，禁止"功能正常""符合预期"。',
+  '    caseType 表达质量风险类型，testLevel 表达 ui/api/service/database/contract/e2e 测试层级；不得混用。',
+  '    remark 记录稳定 CASE-*、可定位来源和 TCND-*；没有判定依据时标记待确认，不得臆测。',
+  '6b. 节点标题保持简短（folder 建议 ≤ 20 字）：长背景说明、数据清单、参考材料写 folder 的 props.detail，',
+  '    不要把长段落塞进节点 text（应用右侧「详情」可完整查看）。',
+  '6c. 清理/删除：删节点用 delete_subtree，批量删用 delete_nodes；删整篇文档用 delete_document（不可恢复，先与用户确认）。',
+  '    不允许绕过 MCP 直接改 .mindmap.json 文件；根节点不能删除。',
+  ...priorityRubricText().split('\n'),
   '7. 用中文回复。',
   '',
   '如果导图按测试维度组织（一级节点 props.method 标注了测试方向），生成用例时：',
   '- 先 query_tree 读取各维度分支（props.method），严格按对应维度的设计方法展开',
-  '- 树必须多级拆分：维度 → 功能点（folder）→ 测试点（folder）→ 用例（case），',
-  '  严禁在维度下直接平铺用例；每个功能点按设计方法拆出 2-5 个测试点，',
-  '  每个测试点下挂 2-6 条用例',
+  '- 保留已有维度节点，其下按稳定业务能力、用户任务或关键状态组织；同一层只表达一个维度',
+  '- 默认控制在 2-4 层文件夹，只有能提高执行或查找效率时才增加测试点文件夹，不为凑数量固定生成节点或用例',
   '- 约束细节见下方维度说明',
 ].join('\n');
 
@@ -89,6 +97,16 @@ const TOOL_DEFS: ToolDef[] = [
     schema: {
       type: 'object',
       properties: { id: { type: 'string' }, title: { type: 'string' } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'delete_document',
+    description: '删除整篇文档（连同文件从目录/首页移除，不可恢复）。id 从 list_documents 获取；单文件模式不支持',
+    schema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
       additionalProperties: false,
     },
   },
@@ -137,11 +155,21 @@ const TOOL_DEFS: ToolDef[] = [
   },
   {
     name: 'delete_subtree',
-    description: '删除节点及其整个子树',
+    description: '删除节点及其整个子树（用例/空分组/模块均可；根节点不可删除）。清理重复或空节点时优先用此工具，不要直接改文件',
     schema: {
       type: 'object',
       properties: { nodeId: { type: 'string' } },
       required: ['nodeId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'delete_nodes',
+    description: '批量删除节点及其子树（清理重复节点/空分组），返回 { removedIds, errors }；某个 id 失败不影响其余节点',
+    schema: {
+      type: 'object',
+      properties: { nodeIds: { type: 'array', items: { type: 'string' } } },
+      required: ['nodeIds'],
       additionalProperties: false,
     },
   },

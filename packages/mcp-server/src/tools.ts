@@ -136,7 +136,7 @@ export function registerTools(
 
   server.tool(
     'delete_subtree',
-    '删除节点及其整个子树。',
+    '删除节点及其整个子树（用例/空分组/模块均可；根节点不可删除）。清理重复或空节点时优先用此工具，不要直接改文件。返回被删除的节点 id。',
     { nodeId: z.string() },
     async ({ nodeId }) => {
       try {
@@ -146,6 +146,26 @@ export function registerTools(
       } catch (e) {
         return err(e);
       }
+    },
+  );
+
+  server.tool(
+    'delete_nodes',
+    '批量删除节点及其整个子树（清理重复节点/空分组用）。逐个执行并立即落盘，返回 { removedIds, errors }；某个 id 失败不影响其余节点，根节点不可删除。',
+    { nodeIds: z.array(z.string()).min(1).describe('要删除的节点 id 列表') },
+    async ({ nodeIds }) => {
+      const removedIds: string[] = [];
+      const errors: Array<{ nodeId: string; error: string }> = [];
+      const s = store();
+      for (const nodeId of nodeIds) {
+        try {
+          removedIds.push(...s.deleteSubtree(nodeId).removedIds);
+        } catch (e) {
+          errors.push({ nodeId, error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      if (removedIds.length) persist();
+      return { content: [{ type: 'text', text: JSON.stringify({ removedIds, errors }) }] };
     },
   );
 
@@ -353,6 +373,23 @@ export function registerTools(
             },
           ],
         };
+      } catch (e) {
+        return err(e);
+      }
+    },
+  );
+
+  server.tool(
+    'delete_document',
+    '删除整篇脑图文档（连同文件从目录/首页移除，不可恢复）。id 从 list_documents 获取；单文件（--file）模式不支持删除文档。',
+    { id: z.string().describe('文档 id（list_documents 返回的 id）') },
+    async ({ id }) => {
+      try {
+        const deleted = ctx.deleteDoc(id);
+        if (!deleted) {
+          throw new Error(`删除失败：文档「${id}」不存在，或当前为单文件模式（--file 不支持删除文档）`);
+        }
+        return { content: [{ type: 'text', text: JSON.stringify({ deleted: id }) }] };
       } catch (e) {
         return err(e);
       }

@@ -25,6 +25,20 @@ make bridge    # 启动桥接服务（端口 47214）：实时协作 + AI 助手
 
 打开 http://localhost:47213，约 12k 演示节点。其他命令：`make help` 查看（`make mcp` 启动 MCP server、`make test`、`make typecheck`）。
 
+## Docker 部署
+
+```bash
+make docker-up     # 构建 x86_64 镜像 + 启动 web(:47213) 与 bridge(:47214)
+make docker-logs   # 跟踪日志
+make docker-down   # 停止（脑图数据保留）
+```
+
+- **数据持久化**：`docker-compose.yml` 将宿主机目录（默认 `./mindmaps`）挂载到容器 `/data/mindmaps`，bridge 的所有脑图 JSON 都落在宿主机目录，容器重建/升级不丢数据。可用 `MINDMAPS_DIR=/path/to/data make docker-up` 覆盖。
+- **端口**：`APP_PORT`（默认 47213）/ `BRIDGE_PORT`（默认 47214）可覆盖；本地 `make dev` 与容器同时运行会端口冲突，二选一。
+- **AI 助手**：在 `.env` 或环境变量中配置 `ANTHROPIC_API_KEY` 传入 bridge 容器即可启用对话生成。
+- **远程服务器部署**：浏览器需能访问 bridge，构建时传 `VITE_BRIDGE_URL=http://<服务器>:<BRIDGE_PORT>`（或在浏览器 console 执行 `localStorage.setItem('ai-mind-map:bridge', 'http://<服务器>:<BRIDGE_PORT>')`）。
+- 其他：`make docker-build PLATFORM=linux/arm64` 构建 arm64 镜像；`make docker-restart` 重建镜像并重启。
+
 ### 交互一览
 
 - **浏览**：滚轮/拖拽平移，Ctrl/⌘+滚轮缩放（左下角工具条：±/适应全图）
@@ -96,6 +110,12 @@ registry.register({
 ```
 
 `normalizeProps` 是唯一写入路径的校验关卡（MCP 工具与表单都经过它）；`describe` 返回画布徽标。随包附带的 `folder`/`case` 只是示例类型。
+
+## 测试用例设计 Skill 与优先级规范
+
+- 内置 **test-case-designer** Skill（Codex 标准，`.agents/skills/test-case-designer/`）：工作模式 → 测试分析 → 追溯 → 设计 → MCP 写入 → 全量 Review。含层级/字段标准、独立的 `caseType` / `testLevel`、**P0–P3 优先级定义与定级规则**、测试设计方法与质量门禁。
+- 确定性校验：`node .agents/skills/test-case-designer/scripts/validate-test-cases.js mindmaps/ --strict`（字段完整性、追溯、重复、空业务分组等）。P0 占比和“必须存在 P0/P1”属于可选策略参数，不是默认正确性规则。
+- 优先级定级规范在平台侧同样生效：`packages/core/src/priority.ts`（bridge/MCP 的 AI 提示词与 `get_test_methods` 约束均引用）。
 
 ## 测试
 

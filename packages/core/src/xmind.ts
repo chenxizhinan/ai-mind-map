@@ -46,13 +46,18 @@ export function buildXmindRootTopic(tree: MindNode): ZenTopic {
   const toZen = (n: MindNode): ZenTopic => {
     const p = n.props as {
       priority?: string;
+      caseType?: string;
+      testLevel?: string;
       precondition?: string;
       steps?: string[];
       expected?: string;
       note?: string;
+      remark?: string;
     };
     const attached: ZenTopic[] = (n.children ?? []).map(toZen);
     // case 字段序列化为子主题，对齐 MeterSphere v3 中文键约定
+    if (p.caseType) attached.push({ id: `${n.id}_type`, title: `用例类型：${p.caseType}` });
+    if (p.testLevel) attached.push({ id: `${n.id}_level`, title: `测试层级：${p.testLevel}` });
     if (p.precondition) attached.push({ id: `${n.id}_pre`, title: `前置条件：${p.precondition}` });
     if (p.steps?.length) {
       const group: ZenTopic = { id: `${n.id}_steps`, title: '步骤描述：' };
@@ -69,7 +74,7 @@ export function buildXmindRootTopic(tree: MindNode): ZenTopic {
     } else if (p.expected) {
       attached.push({ id: `${n.id}_exp`, title: `预期结果：${p.expected}` });
     }
-    if (p.note) attached.push({ id: `${n.id}_note`, title: `备注：${p.note}` });
+    if (p.remark ?? p.note) attached.push({ id: `${n.id}_note`, title: `备注：${p.remark ?? p.note}` });
 
     const zen: ZenTopic = { id: n.id, title: n.text };
     if (p.priority && TO_MARKER[p.priority]) {
@@ -159,21 +164,25 @@ function zenToNode(
 
 /** MeterSphere v3 中文键前缀 */
 function isCaseFieldTopic(title: string): boolean {
-  return /^(前置条件：|步骤描述：|预期结果：|备注：|步骤\d+：)/.test(title);
+  return /^(用例类型：|测试层级：|前置条件：|步骤描述：|预期结果：|备注：|步骤\d+：)/.test(title);
 }
 
 function extractCaseFields(t: ZenTopic): Partial<{
   precondition: string;
+  caseType: string;
+  testLevel: string;
   steps: string[];
   expected: string;
-  note: string;
+  remark: string;
 }> {
-  const out: Partial<{ precondition: string; steps: string[]; expected: string; note: string }> = {};
+  const out: Partial<{ precondition: string; caseType: string; testLevel: string; steps: string[]; expected: string; remark: string }> = {};
   for (const c of t.children?.attached ?? []) {
     const title = c.title ?? '';
-    if (title.startsWith('前置条件：')) out.precondition = title.slice(5);
+    if (title.startsWith('用例类型：')) out.caseType = title.slice(5);
+    else if (title.startsWith('测试层级：')) out.testLevel = title.slice(5);
+    else if (title.startsWith('前置条件：')) out.precondition = title.slice(5);
     else if (title.startsWith('预期结果：')) out.expected = title.slice(5);
-    else if (title.startsWith('备注：')) out.note = title.slice(3);
+    else if (title.startsWith('备注：')) out.remark = title.slice(3);
     else if (title.startsWith('步骤描述：')) {
       const steps: string[] = [];
       for (const s of c.children?.attached ?? []) {

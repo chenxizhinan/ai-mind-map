@@ -8,7 +8,7 @@
  *
  * 所有写入经 save() 落盘（store.ts），与单文件模式同一套校验。
  */
-import { readdirSync, existsSync, statSync, readFileSync } from 'node:fs';
+import { readdirSync, existsSync, statSync, readFileSync, unlinkSync } from 'node:fs';
 import { join, resolve, basename, extname } from 'node:path';
 import { DocStore, NodeTypeRegistry } from '@ai-mind-map/core';
 import { save } from './store.js';
@@ -29,12 +29,14 @@ export interface DocContext {
   listDocs(): DocSummary[];
   /** 切换激活文档。id/title 二选一；重名抛错并列出候选 id */
   openDoc(ref: { id?: string; title?: string }): { id: string; title: string; rootId: string };
-  /** 新建文档并激活。单文件模式抛错 */
-  createDoc(input: { title: string }): { id: string; title: string; rootId: string };
+  /** 新建文档并激活。单文件模式抛错。id 可选：应用首次挂载时用稳定 id，避免重载后重复建文档 */
+  createDoc(input: { title: string; id?: string }): { id: string; title: string; rootId: string };
   /** 按 id 取文档（bridge /doc/:id 路由用）；不存在返回 undefined */
   byId(id: string): DocStore | undefined;
   /** 按 id 替换文档内容（PUT /doc/:id）；--dir 模式未知 id 自建文件。返回 docId */
   putDoc(id: string, raw: unknown): string;
+  /** 删除文档（--dir 删文件并清内存槽位；单文件模式不支持）。返回是否真的删除了文件 */
+  deleteDoc(id: string): boolean;
 }
 
 interface Slot {
@@ -192,8 +194,25 @@ export class DirDocManager implements DocContext {
     throw new Error('open_document 需要 id 或 title 之一');
   }
 
-  createDoc(input: { title: string }): { id: string; title: string; rootId: string } {
+  createDoc(input: { title: string; id?: string }): { id: string; title: string; rootId: string } {
     const title = input.title.trim() || '未命名导图';
+    // 指定 id：已存在则直接复用（应用重载/并发挂载时幂等，不再生成 -2/-3 副本）
+    if (input.id !== undefined) {
+      if (!isValidDocId(input.id)) throw new Error(`非法文档 id: ${input.id}`);
+      const existing = this.loadSlot(input.id);
+      if (existing) {
+        this.activeId = input.id;
+        return { id: input.id, title: existing.store.document.meta.title, rootId: existing.store.root.id };
+      }
+      const store = createEmptyStore(this.registry, title);
+      const fp = this.fileOf(input.id);
+      save(store, fp);
+      this.slots.set(input.id, { store, filePath: fp });
+      this.activeId = input.id;
+      this.dirty.add(input.id);
+      this.known.set(fp, statSync(fp).mtimeMs);
+      return { id: input.id, title, rootId: store.root.id };
+    }
     const base = slugifyTitle(title);
     let id = base;
     let n = 2;
@@ -226,6 +245,24 @@ export class DirDocManager implements DocContext {
     this.dirty.add(id);
     this.known.set(fp, statSync(fp).mtimeMs);
     return id;
+  }
+
+  deleteDoc(id: string): boolean {
+    if (!isValidDocId(id)) return false;
+    const fp = this.fileOf(id);
+    const existed = existsSync(fp);
+    if (existed) {
+      try {
+        unlinkSync(fp);
+      } catch {
+        return false;
+      }
+    }
+    this.slots.delete(id);
+    this.known.delete(id);
+    this.dirty.delete(id);
+    if (this.activeId === id) this.activeId = null;
+    return existed;
   }
 
   /** 目录扫描：返回相对上次快照的增/改/删（bridge 轮询调用） */
@@ -314,7 +351,7 @@ export class SingleDocContext implements DocContext {
     return { id: 'default', title: s.document.meta.title, rootId: s.root.id };
   }
 
-  createDoc(_input: { title: string }): { id: string; title: string; rootId: string } {
+  createDoc(_input: { title: string; id?: string }): { id: string; title: string; rootId: string } {
     throw new Error('单文件模式不支持新建文档。请用 --dir 启动多文档模式（bridge-cli.ts --dir ./mindmaps）');
   }
 
@@ -327,6 +364,10 @@ export class SingleDocContext implements DocContext {
     this.setStore(store);
     save(store, this.filePath);
     return 'default';
+  }
+
+  deleteDoc(_id: string): boolean {
+    return false;
   }
 }
 

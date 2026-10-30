@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, utimesSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { request } from 'node:http';
 import { DocStore, NodeTypeRegistry, registerBuiltinTypes } from '@ai-mind-map/core';
 import { startBridge } from '../src/bridge.js';
 
@@ -64,6 +65,42 @@ describe('bridge', () => {
     });
     expect(res.ok).toBe(true);
     expect(JSON.parse(readFileSync(ctx.filePath, 'utf8')).tree.children[0].text).toBe('m');
+  });
+
+  it('PUT /doc preserves UTF-8 text when request chunks split a Chinese character', async () => {
+    const ctx = setup();
+    cleanupDirs.push(ctx.dir);
+    openHandles.push(ctx.handle);
+    const port = await ctx.ready;
+    const s = ctx.getStore();
+    s.addSubtree(s.root.id, { type: 'folder', text: '迁移状态与页面恢复' });
+    const body = Buffer.from(JSON.stringify(s.toJSON()), 'utf8');
+    const marker = Buffer.from('迁', 'utf8');
+    const markerOffset = body.indexOf(marker);
+    expect(markerOffset).toBeGreaterThanOrEqual(0);
+    const splitAt = markerOffset + 1;
+
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = request(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/doc',
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
+        },
+        (res) => {
+          res.resume();
+          res.on('end', () => resolve(res.statusCode ?? 0));
+        },
+      );
+      req.on('error', reject);
+      req.write(body.subarray(0, splitAt));
+      setTimeout(() => req.end(body.subarray(splitAt)), 10);
+    });
+
+    expect(status).toBe(200);
+    expect(JSON.parse(readFileSync(ctx.filePath, 'utf8')).tree.children[0].text).toBe('迁移状态与页面恢复');
   });
 
   it('PUT /doc rejects invalid props', async () => {
@@ -253,6 +290,42 @@ describe('bridge dir mode (multi-doc)', () => {
     });
     expect(ok2.ok).toBe(true);
     expect(existsSync(join(ctx.docsDir, '自愈-id.mindmap.json'))).toBe(true);
+  });
+
+  it('POST /docs with stable id is idempotent; DELETE /doc/:id removes the file', async () => {
+    const ctx = setupDir();
+    cleanupDirs.push(ctx.dir);
+    openHandles.push(ctx.handle);
+    const port = await ctx.ready;
+
+    const create = async (id: string) =>
+      (await (
+        await fetch(`http://localhost:${port}/docs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: '应用文档', id }),
+        })
+      ).json()) as { id: string; title: string; rootId: string };
+
+    const first = await create('web-stable-id');
+    expect(first.id).toBe('web-stable-id');
+    // 再次用同一 id 挂载：复用而不是生成 -2 副本
+    const second = await create('web-stable-id');
+    expect(second.id).toBe('web-stable-id');
+    const matching = readdirSync(ctx.docsDir).filter((f) => f.startsWith('web-stable-id'));
+    expect(matching).toEqual(['web-stable-id.mindmap.json']);
+
+    // PUT 写内容后 DELETE 删除
+    await fetch(`http://localhost:${port}/doc/web-stable-id`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(minimalDoc('应用文档')),
+    });
+    const del = await fetch(`http://localhost:${port}/doc/web-stable-id`, { method: 'DELETE' });
+    expect(del.status).toBe(200);
+    expect(existsSync(join(ctx.docsDir, 'web-stable-id.mindmap.json'))).toBe(false);
+    const delAgain = await fetch(`http://localhost:${port}/doc/web-stable-id`, { method: 'DELETE' });
+    expect(delAgain.status).toBe(404);
   });
 
   it('changed SSE carries docId in data payload', async () => {

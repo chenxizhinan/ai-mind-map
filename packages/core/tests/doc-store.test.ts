@@ -180,4 +180,37 @@ describe('DocStore', () => {
     const { assignedIds } = restored.addSubtree(restored.root.id, { type: 'folder', text: 'x' });
     expect(assignedIds[0]).not.toBe('n_0001');
   });
+
+  it('fromJSON 自愈缺失/重复的节点 id：保证全局唯一非空', () => {
+    const raw = {
+      version: 1,
+      meta: { title: 't', updatedAt: new Date().toISOString() },
+      tree: {
+        id: '',
+        type: 'folder',
+        text: 'root',
+        props: {},
+        children: [
+          { id: 'dup', type: 'folder', text: 'a', props: {}, children: [] },
+          { id: 'dup', type: 'folder', text: 'b', props: {}, children: [] },
+          { id: '', type: 'folder', text: 'c', props: {}, children: [] },
+        ],
+      },
+      annotations: [],
+    };
+    const store = DocStore.fromJSON(makeRegistry(), raw);
+    const ids: string[] = [];
+    const walk = (n: { id: string; children?: unknown[] }): void => {
+      ids.push(n.id);
+      for (const c of (n.children ?? []) as { id: string; children?: unknown[] }[]) walk(c);
+    };
+    walk(store.root);
+    expect(ids).toHaveLength(4);
+    expect(ids.every((id) => id.length > 0)).toBe(true);
+    expect(new Set(ids).size).toBe(ids.length);
+    // 首次出现的已有 id 保留，重复/空 id 自动补号
+    expect(store.root.children[0]!.id).toBe('dup');
+    // 自愈后的 id 仍可正常选中/定位
+    for (const id of ids) expect(store.getNode(id)).toBeTruthy();
+  });
 });

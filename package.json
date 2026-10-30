@@ -16,10 +16,14 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "demo": "vite apps/app --port 47213 --strictPort",
     "mcp": "tsx packages/mcp-server/src/cli.ts",
-    "dev": "vite apps/app --port 47213 --strictPort"
+    "dev": "vite apps/app --port 47213 --strictPort",
+    "build:web": "vite build apps/app --outDir dist",
+    "build:server": "esbuild packages/mcp-server/src/bridge-cli.ts --bundle --platform=node --format=esm --outfile=dist-server/bridge.mjs",
+    "build": "npm run build:web && npm run build:server"
   },
   "devDependencies": {
     "concurrently": "^10.0.6",
+    "esbuild": "^0.28.2",
     "typescript": "^5.6.0",
     "vite": "^6.0.0",
     "vitest": "^3.0.0"

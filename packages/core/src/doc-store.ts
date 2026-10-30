@@ -40,6 +40,7 @@ export class DocStore {
     };
     if (this.doc.tree.children === undefined) this.doc.tree.children = [];
     this.reindex();
+    this.ensureUniqueIds();
   }
 
   get document(): MindDocument {
@@ -85,6 +86,26 @@ export class DocStore {
     };
     walk(this.doc.tree);
     this.nextId = max + 1;
+  }
+
+  /**
+   * 自愈：保证每个节点都有非空且文档内唯一的 id。
+   * 导入/AI 生成的文档可能缺 id 或 id 重复（会导致无法选中、编辑串节点），
+   * 这里统一补成 n_XXXX（沿用 allocId 的递增规则），已有合法 id 保持不变。
+   */
+  private ensureUniqueIds(): void {
+    const seen = new Set<string>();
+    let changed = false;
+    const walk = (n: MindNode): void => {
+      if (!n.id || seen.has(n.id)) {
+        n.id = this.allocId();
+        changed = true;
+      }
+      seen.add(n.id);
+      for (const c of n.children ?? []) walk(c);
+    };
+    walk(this.doc.tree);
+    if (changed) this.reindex();
   }
 
   getNode(id: string): MindNode | undefined {

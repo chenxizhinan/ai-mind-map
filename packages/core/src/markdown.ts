@@ -14,6 +14,8 @@ export function encodeMarkdown(tree: MindNode): string {
   const p = tree.props as CaseProps;
   lines.push(`# ${tree.text}`);
   if (p.priority) lines.push(`**[P0]**`.replace('P0', p.priority));
+  if (p.caseType) lines.push(`- 用例类型：${p.caseType}`);
+  if (p.testLevel) lines.push(`- 测试层级：${p.testLevel}`);
   if (p.precondition) lines.push(`- 前置条件：${p.precondition}`);
   if (p.steps?.length) {
     p.steps.forEach((s, i) => {
@@ -22,7 +24,7 @@ export function encodeMarkdown(tree: MindNode): string {
     });
   }
   if (p.expected && !p.steps?.length) lines.push(`- 预期：${p.expected}`);
-  if (p.note) lines.push(`- 备注：${p.note}`);
+  if (p.remark ?? p.note) lines.push(`- 备注：${p.remark ?? p.note}`);
 
   const emit = (n: MindNode, depth: number): void => {
     for (const c of n.children ?? []) {
@@ -35,6 +37,8 @@ export function encodeMarkdown(tree: MindNode): string {
         lines.push(`- ${cp.priority ? `**[${cp.priority}]** ` : ''}${c.text}`);
       }
       if (cp.precondition) lines.push(`  - 前置条件：${cp.precondition}`);
+      if (cp.caseType) lines.push(`  - 用例类型：${cp.caseType}`);
+      if (cp.testLevel) lines.push(`  - 测试层级：${cp.testLevel}`);
       if (cp.steps?.length) {
         cp.steps.forEach((s, i) => {
           lines.push(`${prefix ? '  ' : '  '}- 步骤 ${i + 1}：${s}`);
@@ -42,7 +46,7 @@ export function encodeMarkdown(tree: MindNode): string {
         });
       }
       if (cp.expected && !cp.steps?.length) lines.push(`  - 预期：${cp.expected}`);
-      if (cp.note) lines.push(`  - 备注：${cp.note}`);
+      if (cp.remark ?? cp.note) lines.push(`  - 备注：${cp.remark ?? cp.note}`);
       emit(c, depth + 1);
     }
   };
@@ -52,10 +56,13 @@ export function encodeMarkdown(tree: MindNode): string {
 
 interface CaseProps {
   priority?: string;
+  caseType?: string;
+  testLevel?: string;
   precondition?: string;
   steps?: string[];
   expected?: string;
   note?: string;
+  remark?: string;
 }
 
 /** 解析幕布式 Markdown 大纲为树（无法识别的字段行丢弃，返回 warnings） */
@@ -96,12 +103,20 @@ export function decodeMarkdown(md: string): { tree: MindNode; warnings: string[]
         target.props.precondition = text.slice(5);
         continue;
       }
+      if (text.startsWith('用例类型：')) {
+        target.props.caseType = text.slice(5);
+        continue;
+      }
+      if (text.startsWith('测试层级：')) {
+        target.props.testLevel = text.slice(5);
+        continue;
+      }
       if (text.startsWith('预期：')) {
         target.props.expected = text.slice(3);
         continue;
       }
       if (text.startsWith('备注：')) {
-        target.props.note = text.slice(3);
+        target.props.remark = text.slice(3);
         continue;
       }
       const sm = /^步骤\s*\d+：(.*)$/.exec(text);

@@ -1,0 +1,63 @@
+# ai-mind-map Docker Compose 部署
+#
+# - web:    静态站点（apps/app/dist），端口映射 ${APP_PORT} -> 8080
+# - bridge: 多文档服务 + AI 助手后端，端口映射 ${BRIDGE_PORT} -> 47214
+#           脑图 JSON 持久化在宿主机 ${MINDMAPS_DIR}（默认 ./mindmaps）
+#
+# 使用：
+#   make docker-up      # 构建 + 启动（等价 docker compose up -d --build）
+#   make docker-down
+#
+# 浏览器访问 http://localhost:${APP_PORT}；AI 助手通过 bridge(:${BRIDGE_PORT}) 读写脑图。
+# 远程部署时，浏览器需要能访问 bridge：设置 VITE_BRIDGE_URL 构建参数或
+# 在应用里用 localStorage.setItem('ai-mind-map:bridge', 'http://<host>:<port>') 覆盖。
+
+name: ai-mind-map
+
+services:
+  web:
+    image: ${DOCKER_IMAGE:-ai-mind-map}:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # 默认构建 x86_64 镜像；arm64 机器可用 make docker-build PLATFORM=linux/arm64 覆盖
+      platforms:
+        - linux/amd64
+      args:
+        # 浏览器从宿主机访问，bridge 地址指向发布的端口
+        VITE_BRIDGE_URL: http://localhost:${BRIDGE_PORT:-47214}
+    ports:
+      - "${APP_PORT:-47213}:8080"
+    depends_on:
+      bridge:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  bridge:
+    image: ${DOCKER_IMAGE:-ai-mind-map}:${TAG:-latest}
+    # 覆盖默认 CMD：启动 bridge 多文档服务；脑图目录挂载持久化
+    command: ["node", "bridge.mjs", "--dir", "/data/mindmaps", "--port", "47214"]
+    environment:
+      BRIDGE_HOST: 0.0.0.0
+      # AI 助手（/ai/chat）需要；不配置时其余功能均可正常使用
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # 可选：覆盖模型
+      # MODEL: claude-opus-5-5
+    ports:
+      - "${BRIDGE_PORT:-47214}:47214"
+    volumes:
+      # 脑图 JSON 持久化到宿主机目录（容器内 /data/mindmaps）
+      - ${MINDMAPS_DIR:-./mindmaps}:/data/mindmaps
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:47214/docs').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -35,9 +35,12 @@ function sampleTree(): MindNode {
             text: '正确密码登录成功',
             props: {
               priority: 'P1',
+              caseType: 'security',
+              testLevel: 'ui',
               precondition: '已注册用户',
               steps: ['打开登录页', '输入正确账号密码', '点击登录'],
               expected: '跳转首页',
+              remark: 'CASE-001 · 来源：需求 §1 · 测试条件：TCND-001',
             },
             children: [],
           },
@@ -72,9 +75,12 @@ describe('XMind roundtrip', () => {
     const c1 = restored.children![0]!.children![0]!;
     expect(c1.text).toBe('正确密码登录成功');
     expect(c1.props.priority).toBe('P1');
+    expect(c1.props.caseType).toBe('security');
+    expect(c1.props.testLevel).toBe('ui');
     expect(c1.props.precondition).toBe('已注册用户');
     expect(c1.props.steps).toEqual(['打开登录页', '输入正确账号密码', '点击登录']);
     expect(c1.props.expected).toBe('跳转首页');
+    expect(c1.props.remark).toContain('CASE-001');
 
     // 深层路径
     const deep = restored.children![0]!.children![2]!.children![0]!;
@@ -88,6 +94,9 @@ describe('XMind roundtrip', () => {
     expect(c1).toBeTruthy();
     const titles = (c1?.children?.attached ?? []).map((t) => t.title);
     expect(titles).toContain('前置条件：已注册用户');
+    expect(titles).toContain('用例类型：security');
+    expect(titles).toContain('测试层级：ui');
+    expect(titles).toContain('备注：CASE-001 · 来源：需求 §1 · 测试条件：TCND-001');
     // 步骤在「步骤描述：」分组下，预期结果嵌在首个步骤下
     const stepsGroup = (c1?.children?.attached ?? []).find((t) => t.title === '步骤描述：');
     expect(stepsGroup).toBeTruthy();
@@ -105,6 +114,9 @@ describe('Markdown encode', () => {
     expect(md).toContain('# 订单中心');
     expect(md).toContain('## **[P1]** 正确密码登录成功');
     expect(md).toContain('- 前置条件：已注册用户');
+    expect(md).toContain('- 用例类型：security');
+    expect(md).toContain('- 测试层级：ui');
+    expect(md).toContain('- 备注：CASE-001 · 来源：需求 §1 · 测试条件：TCND-001');
     expect(md).toContain('- 步骤 1：打开登录页');
     expect(md).toContain('- 预期：提示密码错误');
   });
@@ -117,9 +129,12 @@ describe('Markdown decode', () => {
       '',
       '## 登录模块',
       '',
+      '- 用例类型：security',
+      '- 测试层级：ui',
       '- 前置条件：已注册用户',
       '- 步骤 1：打开登录页',
       '  - 预期：跳转首页',
+      '- 备注：CASE-001 · 来源：需求 §1 · 测试条件：TCND-001',
       '',
       '### 嵌套路径',
       '',
@@ -131,8 +146,11 @@ describe('Markdown decode', () => {
     expect(tree.text).toBe('订单中心');
     expect(tree.children![0]!.text).toBe('登录模块');
     expect(tree.children![0]!.props.precondition).toBe('已注册用户');
+    expect(tree.children![0]!.props.caseType).toBe('security');
+    expect(tree.children![0]!.props.testLevel).toBe('ui');
     expect(tree.children![0]!.props.steps).toEqual(['打开登录页']);
     expect(tree.children![0]!.props.expected).toBe('跳转首页');
+    expect(tree.children![0]!.props.remark).toContain('CASE-001');
     // 层级：订单中心 > 登录模块 > 嵌套路径 > 深用例
     const deep = tree.children![0]!.children![0]!.children![0]!;
     expect(deep.text).toBe('深用例');
@@ -143,6 +161,8 @@ describe('Markdown decode', () => {
     const { tree } = decodeMarkdown(md);
     expect(tree.text).toBe('订单中心');
     expect(tree.children![0]!.children![0]!.props.priority).toBe('P1');
+    expect(tree.children![0]!.children![0]!.props.caseType).toBe('security');
+    expect(tree.children![0]!.children![0]!.props.testLevel).toBe('ui');
     expect(tree.children![0]!.children![0]!.props.steps).toEqual([
       '打开登录页',
       '输入正确账号密码',

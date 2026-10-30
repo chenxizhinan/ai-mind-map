@@ -35,6 +35,8 @@ export interface BridgeFileOptions {
   registry: NodeTypeRegistry;
   filePath: string;
   port: number;
+  /** 监听地址，默认 127.0.0.1；容器部署时设为 0.0.0.0 */
+  host?: string;
   model?: string;
   anthropicFactory?: () => AnthropicLike;
 }
@@ -44,6 +46,8 @@ export interface BridgeDirOptions {
   docs: DirDocManager;
   registry: NodeTypeRegistry;
   port: number;
+  /** 监听地址，默认 127.0.0.1；容器部署时设为 0.0.0.0 */
+  host?: string;
   model?: string;
   anthropicFactory?: () => AnthropicLike;
 }
@@ -128,7 +132,7 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
     const url = new URL(req.url ?? '/', 'http://bridge');
     // 本地工具，开放 CORS 便于应用从任意端口 dev server 访问
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (req.method === 'OPTIONS') {
       res.writeHead(204).end();
@@ -189,8 +193,11 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
         }
         const raw = await readBody(req);
         let title = '';
+        let id: string | undefined;
         try {
-          title = String((JSON.parse(raw) as { title?: unknown }).title ?? '').trim();
+          const body = JSON.parse(raw) as { title?: unknown; id?: unknown };
+          title = String(body.title ?? '').trim();
+          id = typeof body.id === 'string' && body.id ? body.id : undefined;
         } catch {
           json(res, 400, { error: 'body must be JSON {title}' });
           return;
@@ -200,7 +207,7 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
           return;
         }
         await enqueue(async () => {
-          const r = opts.docs.createDoc({ title });
+          const r = opts.docs.createDoc({ title, id });
           json(res, 200, r);
         });
         return;
@@ -233,9 +240,9 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
         return;
       }
 
-      // ---- 按文档 id 读写（--dir 为主；--file 模式任意 id 落到唯一文件，自愈旧 remoteId） ----
+      // ---- 按文档 id 读写删（--dir 为主；--file 模式任意 id 落到唯一文件，自愈旧 remoteId） ----
       const docIdMatch = /^\/doc\/([^/]+)$/.exec(url.pathname);
-      if (docIdMatch && (req.method === 'GET' || req.method === 'PUT')) {
+      if (docIdMatch && (req.method === 'GET' || req.method === 'PUT' || req.method === 'DELETE')) {
         const rawId = decodeURIComponent(docIdMatch[1]!);
         if (!isValidDocId(rawId)) {
           json(res, 400, { error: `invalid doc id` });
@@ -248,6 +255,18 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
             return;
           }
           json(res, 200, s.toJSON());
+          return;
+        }
+        if (req.method === 'DELETE') {
+          if (!isDir) {
+            json(res, 400, { error: '单文件模式不支持删除文档。请用 --dir 启动多文档模式' });
+            return;
+          }
+          await enqueue(async () => {
+            const removed = docs.deleteDoc(rawId);
+            if (removed) broadcast(rawId, '');
+            json(res, removed ? 200 : 404, removed ? { ok: true } : { error: `document not found: ${rawId}` });
+          });
           return;
         }
         // PUT /doc/:id
@@ -329,17 +348,19 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
   // ---- 轮询（外部进程改文件 → 重载 + 广播） ----
   const pollTimer = setInterval(() => {
     if (isDir) {
-      const { added, changed } = opts.docs.scanForChanges();
+      const { added, changed, removed } = opts.docs.scanForChanges();
       for (const id of [...added, ...changed]) {
         const s = docs.byId(id);
         broadcast(id, s?.document.meta.title);
       }
+      // 外部删除也要广播，应用端会据此把“仅远端”卡片同步清理掉
+      for (const id of removed) broadcast(id, '');
     } else if (reloadIfChanged()) {
       broadcast('default', docs.store().document.meta.title);
     }
   }, 1000);
 
-  server.listen(opts.port, '127.0.0.1');
+  server.listen(opts.port, opts.host ?? '127.0.0.1');
   const ready = new Promise<number>((resolve) => {
     server.once('listening', () => {
       const addr = server.address();
@@ -362,9 +383,14 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
-    let raw = '';
-    req.on('data', (c) => (raw += c));
-    req.on('end', () => resolve(raw));
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    // HTTP chunks may split a multi-byte UTF-8 character. Decode only after
+    // concatenating the raw bytes; coercing each chunk to string separately
+    // inserts U+FFFD and can persist corrupted document text.
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
 }

@@ -58,6 +58,13 @@ export const defaultTheme: Theme = {
   insertLine: '#dc2626',
 };
 
+/** 用例执行状态胶囊样式（未执行 = 无值，不绘制）：文字 + 彩色胶囊 */
+const EXEC_BADGES: Record<string, { bg: string; border: string; text: string; label: string }> = {
+  pass: { bg: '#dcfce7', border: '#16a34a', text: '#15803d', label: '通过' },
+  blocked: { bg: '#fef9c3', border: '#eab308', text: '#a16207', label: '阻塞' },
+  fail: { bg: '#fee2e2', border: '#dc2626', text: '#b91c1c', label: '失败' },
+};
+
 export interface RendererOptions {
   theme?: Partial<Theme>;
   onSelect?: (node: FlatNode | null) => void;
@@ -922,8 +929,9 @@ export class MindRenderer {
       }
     });
 
-    // 优先级徽标
+    // 优先级徽标（记录其背离节点中心的一侧边缘，供执行状态徽标紧随其后）
     const pr = (n.props as { priority?: string }).priority;
+    let priorityOuterX: number | null = null;
     if (pr && n.depth > 0) {
       const bw = 24 * s;
       const bx = n.side === 'left' ? p0.x + 6 * s : p0.x + w - 6 * s - bw;
@@ -936,28 +944,32 @@ export class MindRenderer {
       ctx.textAlign = 'center';
       ctx.fillText(pr, bx + bw / 2, p0.y + h / 2 + 0.5);
       ctx.textAlign = 'left';
+      priorityOuterX = n.side === 'left' ? bx : bx + bw;
     }
 
-    // 执行标记（case 节点左上角小圆：通过绿/失败红/阻塞橙）
+    // 执行状态胶囊（测试用例）：文字 + 彩底（通过绿/阻塞黄/失败红），画在优先级更外侧；未执行不展示
     const exec = (n.props as { exec?: string }).exec;
-    if (exec) {
-      const execColors: Record<string, string> = { pass: '#16a34a', fail: '#dc2626', blocked: '#ea580c' };
-      const execMarks: Record<string, string> = { pass: '✓', fail: '✗', blocked: '⏸' };
-      const ec = execColors[exec]!;
-      const cx = n.side === 'left' ? p0.x + w - 8 * s : p0.x + 8 * s;
-      const cy = p0.y + 6 * s;
+    const execInfo = n.type === 'case' && exec ? EXEC_BADGES[exec] : undefined;
+    if (execInfo) {
+      const efs = Math.max(8, 10 * s);
+      const padX = 6 * s;
+      const ph = 18 * s;
+      ctx.font = `600 ${efs}px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
+      const pw = ctx.measureText(execInfo.label).width + padX * 2;
+      const outerEdge = priorityOuterX ?? (n.side === 'left' ? p0.x : p0.x + w);
+      const px = n.side === 'left' ? outerEdge - 4 * s - pw : outerEdge + 4 * s;
+      const py = p0.y + h / 2 - ph / 2;
       ctx.beginPath();
-      ctx.arc(cx, cy, 6.5 * s, 0, Math.PI * 2);
-      ctx.fillStyle = ec;
+      ctx.roundRect(px, py, pw, ph, ph / 2);
+      ctx.fillStyle = execInfo.bg;
       ctx.fill();
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.2 * s;
+      ctx.strokeStyle = execInfo.border;
+      ctx.lineWidth = Math.max(1, 1.2 * s);
       ctx.stroke();
-      ctx.fillStyle = '#fff';
-      ctx.font = `700 ${Math.max(8, 9 * s)}px -apple-system, sans-serif`;
+      ctx.fillStyle = execInfo.text;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(execMarks[exec]!, cx, cy + 0.5);
+      ctx.fillText(execInfo.label, px + pw / 2, p0.y + h / 2 + 0.5);
       ctx.textAlign = 'left';
     }
 
