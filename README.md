@@ -36,7 +36,7 @@ make docker-down   # 停止（脑图数据保留）
 - **数据持久化**：`docker-compose.yml` 将宿主机目录（默认 `./mindmaps`）挂载到容器 `/data/mindmaps`，bridge 的所有脑图 JSON 都落在宿主机目录，容器重建/升级不丢数据。可用 `MINDMAPS_DIR=/path/to/data make docker-up` 覆盖。
 - **端口**：`APP_PORT`（默认 47213）/ `BRIDGE_PORT`（默认 47214）可覆盖；本地 `make dev` 与容器同时运行会端口冲突，二选一。
 - **AI 助手**：在 `.env` 或环境变量中配置 `ANTHROPIC_API_KEY` 传入 bridge 容器即可启用对话生成。
-- **远程服务器部署**：浏览器需能访问 bridge，构建时传 `VITE_BRIDGE_URL=http://<服务器>:<BRIDGE_PORT>`（或在浏览器 console 执行 `localStorage.setItem('ai-mind-map:bridge', 'http://<服务器>:<BRIDGE_PORT>')`）。
+- **远程服务器部署**：默认使用当前页面的 hostname 和 `47214` 端口连接 bridge；自定义端口或反向代理时可传 `VITE_BRIDGE_URL=http://<服务器>:<BRIDGE_PORT>`（或在浏览器 console 执行 `localStorage.setItem('ai-mind-map:bridge', 'http://<服务器>:<BRIDGE_PORT>')`）。
 - 其他：`make docker-build PLATFORM=linux/arm64` 构建 arm64 镜像；`make docker-restart` 重建镜像并重启。
 
 ### 交互一览

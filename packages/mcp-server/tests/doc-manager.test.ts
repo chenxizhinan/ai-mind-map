@@ -152,7 +152,7 @@ describe('tools with {docs} context', () => {
     return { dir, docs, tools };
   }
 
-  it('create_document → add_subtree → query_tree across two docs', async () => {
+  it('requires docId with multiple docs and keeps writes isolated', async () => {
     const { dir, tools } = setupTools();
     const create = tools.get('create_document')!;
     const add = tools.get('add_subtree')!;
@@ -163,15 +163,24 @@ describe('tools with {docs} context', () => {
     const r1 = JSON.parse((await create({ title: '文档一' })).content[0].text.split('。')[0]!);
     const r2 = JSON.parse((await create({ title: '文档二' })).content[0].text.split('。')[0]!);
     expect(r1.rootId).toBe('n_0001');
-    await add({ parentId: r1.rootId, subtree: { type: 'folder', text: '模块一' } });
-    // 切回文档一，验证隔离
+    expect(r2.rootId).toBe('n_0001');
+
+    // 多文档时拒绝依赖共享 active，避免相同节点 id 写进错误文件。
+    const unsafe = await add({ parentId: r1.rootId, subtree: { type: 'folder', text: '不应写入' } });
+    expect(unsafe.isError).toBe(true);
+    expect(unsafe.content[0].text).toContain('docId');
+
+    await add({ docId: r1.id, parentId: r1.rootId, subtree: { type: 'folder', text: '模块一' } });
     const opened = JSON.parse((await open({ title: '文档一' })).content[0].text);
     expect(opened.title).toBe('文档一');
-    await add({ parentId: opened.rootId, subtree: { type: 'case', text: '用例1' } });
-    const q = JSON.parse((await query({ nodeId: opened.rootId, limit: 50 })).content[0].text);
-    const texts = q.nodes.map((n: { text: string }) => n.text);
-    expect(texts).toContain('用例1');
-    expect(texts).not.toContain('模块一');
+    await add({ docId: r2.id, parentId: r2.rootId, subtree: { type: 'case', text: '用例2' } });
+
+    const q1 = JSON.parse((await query({ docId: r1.id, nodeId: r1.rootId, limit: 50 })).content[0].text);
+    const q2 = JSON.parse((await query({ docId: r2.id, nodeId: r2.rootId, limit: 50 })).content[0].text);
+    expect(q1.nodes.map((n: { text: string }) => n.text)).toContain('模块一');
+    expect(q1.nodes.map((n: { text: string }) => n.text)).not.toContain('用例2');
+    expect(q2.nodes.map((n: { text: string }) => n.text)).toContain('用例2');
+    expect(q2.nodes.map((n: { text: string }) => n.text)).not.toContain('模块一');
 
     // list_documents 标记 active
     const listOut = JSON.parse((await list({})).content[0].text) as Array<{ id: string; active: boolean }>;

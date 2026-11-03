@@ -18,8 +18,8 @@ RUN --mount=type=cache,target=/root/.npm \
 
 # 复制源码并构建：web 静态产物 + bridge 单文件 bundle
 COPY . .
-# bridge 地址构建期注入（默认指向 localhost:47214，浏览器直连发布的 bridge 端口）
-ARG VITE_BRIDGE_URL=http://localhost:47214
+# bridge 地址可在构建期注入；留空时前端按浏览器当前 hostname 推导。
+ARG VITE_BRIDGE_URL=
 ENV VITE_BRIDGE_URL=$VITE_BRIDGE_URL
 RUN npm run build:web \
  && npm run build:server

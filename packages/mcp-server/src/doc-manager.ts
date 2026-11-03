@@ -24,8 +24,8 @@ export interface DocSummary {
 export interface DocContext {
   /** 当前激活文档（现有全部节点工具作用于它） */
   store(): DocStore;
-  /** 持久化激活文档（写它自己的文件） */
-  persist(): void;
+  /** 持久化指定文档；不传 id 时兼容旧行为，写当前激活文档。 */
+  persist(id?: string): void;
   listDocs(): DocSummary[];
   /** 切换激活文档。id/title 二选一；重名抛错并列出候选 id */
   openDoc(ref: { id?: string; title?: string }): { id: string; title: string; rootId: string };
@@ -138,13 +138,13 @@ export class DirDocManager implements DocContext {
     return slot.store;
   }
 
-  persist(): void {
-    if (!this.activeId) return;
-    const slot = this.loadSlot(this.activeId);
+  persist(id = this.activeId ?? undefined): void {
+    if (!id) return;
+    const slot = this.loadSlot(id);
     if (!slot) return;
     save(slot.store, slot.filePath);
-    this.dirty.add(this.activeId);
-    this.known.set(this.fileOf(this.activeId), statSync(slot.filePath).mtimeMs);
+    this.dirty.add(id);
+    this.known.set(this.fileOf(id), statSync(slot.filePath).mtimeMs);
   }
 
   listDocs(): DocSummary[] {
@@ -325,7 +325,8 @@ export class SingleDocContext implements DocContext {
     return this.getStore();
   }
 
-  persist(): void {
+  persist(id?: string): void {
+    if (id && id !== 'default') throw new Error(`单文件模式只有一篇文档（id=default）`);
     save(this.getStore(), this.filePath);
   }
 

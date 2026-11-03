@@ -1032,26 +1032,38 @@ const COPY_ICON =
   '<path d="M10.5 4V3.3c0-.72-.58-1.3-1.3-1.3H4.3C3.58 2 3 2.58 3 3.3v6.9c0 .72.58 1.3 1.3 1.3h1.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' +
   '</svg>';
 
-/** 复制文本到剪贴板并提示（Clipboard API 不可用时回退 execCommand） */
-async function copyText(text: string, label: string): Promise<void> {
+/** 复制文本到剪贴板并提示（HTTP 等非安全上下文直接回退 execCommand）。 */
+async function copyText(text: string, label: string): Promise<boolean> {
+  const legacyCopy = (): boolean => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const copied = document.execCommand('copy');
+    ta.remove();
+    return copied;
+  };
+
   try {
-    if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
-    await navigator.clipboard.writeText(text);
+    if (window.isSecureContext && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else if (!legacyCopy()) {
+      throw new Error('legacy clipboard unavailable');
+    }
   } catch {
     try {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      ta.remove();
+      if (!legacyCopy()) throw new Error('copy command rejected');
     } catch {
       toast('复制失败，请手动选择文本', 'error');
-      return;
+      return false;
     }
   }
   toast(`已复制${label}`, 'success');
+  return true;
 }
 
 /**
@@ -2132,11 +2144,13 @@ window.addEventListener('beforeunload', () => {
 });
 
 // ---------- 桥接服务（实时协作） ----------
-// bridge 地址优先级：localStorage 覆盖 > 构建期注入（Docker/静态部署）> 本地默认
+// bridge 地址优先级：localStorage 覆盖 > 构建期注入 > 当前页面主机的 47214 端口。
+// 最后一项让同一镜像部署到任意 IP/域名时都不会错误指向访问者自己的 localhost。
+const inferredBridgeUrl = `${window.location.protocol}//${window.location.hostname}:47214`;
 const BRIDGE_URL = (
-  localStorage.getItem('ai-mind-map:bridge') ??
-  __AI_MIND_MAP_BRIDGE_URL__ ??
-  'http://localhost:47214'
+  localStorage.getItem('ai-mind-map:bridge') ||
+  __AI_MIND_MAP_BRIDGE_URL__?.trim() ||
+  inferredBridgeUrl
 ).replace(/\/$/, '');
 /** 按文档记录的最近推送时间（回声抑制，多文档模式下按 remoteId 区分） */
 const lastPushAtByRemote = new Map<string, number>();
@@ -2748,26 +2762,13 @@ async function openConnectDialog(): Promise<void> {
         2,
       );
 
-  const skillText = `---
-name: test-case-designer
-description: 从需求/RFC/接口/代码/历史缺陷设计、补齐或评审手工测试用例，并通过 ai-mind-map MCP 写入脑图；含 P0-P3 定级规范与质量门禁
----
-
-# 测试用例设计与评审
-
-1. 先调用 get_test_methods 获取测试设计方法约束；按需求选择适用方法（状态机/场景法/等价类/边界值/判定表/故障注入/兼容矩阵/数据一致性/安全/性能），不要机械套满全部维度
-2. 层级由需求决定（产品/入口 → 版本阶段 → 前置状态 → 用例），同一层只表达一个分类维度，≤4 层文件夹；禁止用 profile、current、SWITCH_PENDING 等内部实现名做业务目录
-3. 会话开始先 list_documents；生成新用例集必须 create_document 新建，严禁往现有文档里灌；更新既有文档先 open_document
-4. 用 add_subtree 一次提交整棵子树；标题 =【必要条件】执行动作｜唯一核心结果，一个用例只测一个可独立判定的点
-5. 长背景/数据清单写 props.detail；来源/接口/内部状态码写 props.remark；预期必须可观察可判定
-6. 优先级按 业务影响×发生概率×恢复难度 定级（P0 必须能回答“失败是否禁止发布”）；不允许默认全 P0，同一业务域不能全 P0；P0/P1 必须有完整步骤与断言，备注说明失败影响
-7. 完成后 query_tree 自查，并向用户报告：数量、覆盖方法、优先级分布与待确认项`;
+  const skillText = __AI_MIND_MAP_SKILL__;
 
   const chatHint = `我在用 ai-mind-map 管理测试用例脑图（MCP 已连接）。
 请读取 <方案文档或代码目录>，然后：
 1. 先 list_documents 看现有文档；
-2. 用 create_document 新建一篇脑图（标题 = 方案名）；
-3. add_subtree 按「模块 → 小节 → 用例」挂载，用例 props 带 priority / expected / remark（来源引用）。
+2. 用 create_document 新建一篇脑图（标题 = 方案名），保存返回的 id；
+3. 后续 query_tree / get_test_methods / add_subtree / validate_document 每次都显式传这个 docId，按「模块 → 小节 → 用例」挂载，用例 props 带 priority / expected / remark（来源引用）。
 不要动我已有的脑图文档。`;
 
   const overlay = document.createElement('div');
@@ -2822,9 +2823,9 @@ description: 从需求/RFC/接口/代码/历史缺陷设计、补齐或评审手
           </span>
         </div>
         <div style="font-size:11.5px;color:#64748b;margin-bottom:6px">
-          完整版（含层级/标题/优先级标准与质量门禁脚本）已内置仓库
-          <code>.agents/skills/test-case-designer/</code>；上面的精简版可存为
-          <code>.claude/skills/test-case-designer/SKILL.md</code> 快速上手。
+          复制或下载的内容与仓库最新
+          <code>.agents/skills/test-case-designer/SKILL.md</code> 一致；完整使用时请同时保留该目录下的
+          <code>references/</code> 与 <code>scripts/</code>。
         </div>
         <pre id="conn-skill" style="display:none">${escapeHtml(skillText)}</pre>
         <div style="font-size:11.5px;color:#94a3b8">内容已就绪：点上方按钮复制或下载（不占弹窗空间）</div>
@@ -2868,12 +2869,10 @@ description: 从需求/RFC/接口/代码/历史缺陷设计、补齐或评审手
   overlay.querySelectorAll('.conn-copy').forEach((btn) =>
     btn.addEventListener('click', async () => {
       const key = (btn as HTMLElement).dataset.copy!;
-      try {
-        await navigator.clipboard.writeText(payload()[key]!);
+      const copied = await copyText(payload()[key]!, (copyLabel[key] ?? '内容').replace(/^复制/, ''));
+      if (copied) {
         btn.textContent = '已复制 ✓';
         setTimeout(() => (btn.textContent = copyLabel[key] ?? '复制'), 1400);
-      } catch {
-        toast('复制失败：浏览器未授权剪贴板', 'warn');
       }
     }),
   );

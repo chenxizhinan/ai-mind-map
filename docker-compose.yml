@@ -9,8 +9,8 @@
 #   make docker-down
 #
 # 浏览器访问 http://localhost:${APP_PORT}；AI 助手通过 bridge(:${BRIDGE_PORT}) 读写脑图。
-# 远程部署时，浏览器需要能访问 bridge：设置 VITE_BRIDGE_URL 构建参数或
-# 在应用里用 localStorage.setItem('ai-mind-map:bridge', 'http://<host>:<port>') 覆盖。
+# 默认按浏览器当前 hostname + BRIDGE_PORT 连接 bridge；也可设置 VITE_BRIDGE_URL
+# 或用 localStorage.setItem('ai-mind-map:bridge', 'http://<host>:<port>') 覆盖。
 
 name: ai-mind-map
 
@@ -24,8 +24,8 @@ services:
       platforms:
         - linux/amd64
       args:
-        # 浏览器从宿主机访问，bridge 地址指向发布的端口
-        VITE_BRIDGE_URL: http://localhost:${BRIDGE_PORT:-47214}
+        # 留空时前端按浏览器当前 hostname 推导；反向代理等场景可显式覆盖
+        VITE_BRIDGE_URL: ${VITE_BRIDGE_URL:-}
     ports:
       - "${APP_PORT:-47213}:8080"
     depends_on:
