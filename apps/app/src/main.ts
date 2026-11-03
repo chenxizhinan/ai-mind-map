@@ -241,18 +241,9 @@ function countNodes(n: MindNode): number {
 }
 
 function toggleCollapse(id: string): void {
-  if (!expandedIds) {
-    expandedIds = new Set();
-    const walk = (n: MindNode, d: number): void => {
-      if (d < 2) {
-        expandedIds!.add(n.id);
-        for (const c of n.children ?? []) walk(c, d + 1);
-      }
-    };
-    walk(store.root, 0);
-  }
-  if (expandedIds.has(id)) expandedIds.delete(id);
-  else expandedIds.add(id);
+  ensureExpandedInit();
+  if (expandedIds!.has(id)) expandedIds!.delete(id);
+  else expandedIds!.add(id);
   relayout();
 }
 
@@ -642,6 +633,22 @@ function ensureExpandedInit(): void {
     }
   };
   walk(store.root, 0);
+}
+
+/** 同步展开状态与挂起保存；SSE/远端刷新不能把用户刚做的折叠丢掉 */
+function persistExpandedNow(): void {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  persistCurrent();
+  if (currentDocId) {
+    try {
+      localStorage.setItem(LS_EXPANDED + ':' + currentDocId, JSON.stringify([...(expandedIds ?? [])]));
+    } catch {
+      /* 存储满：静默 */
+    }
+  }
 }
 
 searchInput.addEventListener('input', () => {
@@ -2121,18 +2128,7 @@ docTitleEl.addEventListener('blur', commitDocTitle);
 
 // 防抖期间关闭页面时立即落盘
 window.addEventListener('beforeunload', () => {
-  if (saveTimer) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
-    persistCurrent();
-    if (currentDocId) {
-      try {
-        localStorage.setItem(LS_EXPANDED + ':' + currentDocId, JSON.stringify([...(expandedIds ?? [])]));
-      } catch {
-        /* ignore */
-      }
-    }
-  }
+  persistExpandedNow();
 });
 
 // ---------- 桥接服务（实时协作） ----------
@@ -2144,6 +2140,8 @@ const BRIDGE_URL = (
 ).replace(/\/$/, '');
 /** 按文档记录的最近推送时间（回声抑制，多文档模式下按 remoteId 区分） */
 const lastPushAtByRemote = new Map<string, number>();
+/** 按文档记录的最近拉取时间：拉取触发的重排不应再回推（否则形成 PUT↔GET 回声循环） */
+const lastPullAtByRemote = new Map<string, number>();
 /** true = bridge 已确认为多文档模式（GET /docs 可用） */
 let bridgeMultiDoc = false;
 
@@ -2171,11 +2169,24 @@ async function pullRemote(docId?: string): Promise<void> {
     const res = await fetch(url);
     if (!res.ok) return;
     const d = (await res.json()) as MindDocument;
-    // currentDocId 保持不变：拉取的内容按语义就是当前槽位的最新内容
-    // （多文档模式按 remoteId 对应；遗留模式等价旧版行为）
-    loadDoc(d, true); // keepViewport: 平移缩放不动，只换数据
-    expandedIds = null; // 默认展开深度
     if (currentDocId) touchDocEntry(currentDocId, d.meta.title || '未命名导图');
+    // 远端替换内容时保留当前视图状态；若涉及节点增删，relayout 会自动过滤失效 id
+    const currentExpanded = expandedIds;
+    const selectedId = selected?.id;
+    // 内容与当前一致（仅 meta.updatedAt 不同）→ 不动视图，也不回推，直接结束
+    const sameContent =
+      doc.tree === d.tree ||
+      (JSON.stringify({ t: doc.tree, a: doc.annotations }) === JSON.stringify({ t: d.tree, a: d.annotations }) &&
+        doc.meta.title === d.meta.title);
+    lastPullAtByRemote.set(rid ?? '#legacy', Date.now());
+    if (sameContent) {
+      syncDocTitle();
+      return;
+    }
+    loadDoc(d, true); // keepViewport: 平移缩放不动，只换数据
+    expandedIds = currentExpanded;
+    relayout();
+    if (selectedId) selectId(selectedId);
     syncDocTitle();
   } catch {
     /* bridge 未启动：静默降级为本地模式 */
@@ -2276,6 +2287,7 @@ const remoteMounts = new Map<string, Promise<string | null>>();
 async function ensureRemoteDoc(docId: string, title: string): Promise<string | null> {
   const entry = loadDocsIndex().find((e) => e.id === docId);
   if (!entry) return null; // 索引外的临时文档不推送，避免生成孤儿文档
+  if (entry.demo) return null; // 演示文档不自动挂载：避免每个新浏览器/服务器都长出一份演示副本
   if (entry.remoteId) return entry.remoteId;
   const inflight = remoteMounts.get(docId);
   if (inflight) return inflight;
@@ -2333,6 +2345,11 @@ async function pushRemote(): Promise<void> {
   try {
     const rid = await ensureRemoteDoc(senderId, title);
     if (rid) {
+      // 刚从远端拉取的内容不回推：内容源自 bridge，回推会形成 PUT↔GET 回声循环
+      if (Date.now() - (lastPullAtByRemote.get(rid) ?? 0) < 1200) {
+        lastPushAtByRemote.set(rid, Date.now()); // 仍抑制本次回声
+        return;
+      }
       lastPushAtByRemote.set(rid, Date.now());
       await fetch(`${BRIDGE_URL}/doc/${encodeURIComponent(rid)}`, {
         method: 'PUT',
@@ -3006,13 +3023,13 @@ document.getElementById('home-btn')?.addEventListener('click', () => {
 })();
 
 if (!loadDocsIndex().length) {
-  // 首次使用：预置演示文档
+  // 首次使用：预置演示文档（demo 标记：不自动挂载到 bridge，真正编辑后才参与同步）
   const id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const d = makeDemo();
   try {
     localStorage.setItem(DOC_PREFIX + id, JSON.stringify(d));
     const entries = loadDocsIndex();
-    entries.unshift({ id, title: d.meta.title, updatedAt: Date.now() });
+    entries.unshift({ id, title: d.meta.title, updatedAt: Date.now(), demo: true });
     saveDocsIndex(entries);
     localStorage.setItem(LAST_DOC_KEY, id);
   } catch {

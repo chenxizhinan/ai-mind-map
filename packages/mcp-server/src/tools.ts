@@ -11,6 +11,8 @@ import { loadOrCreate, save } from './store.js';
 import { writeFileSync, readFileSync } from 'node:fs';
 import { encodeXmind, encodeMarkdown, renderMethodPrompt, TEST_DESIGN_METHODS } from '@ai-mind-map/core';
 import { singleDocContext, type DocContext } from './doc-manager.js';
+// @ts-expect-error skill 脚本是无类型的 JS，动态能力在这里只用到 validateDocument 的返回形状
+import { validateDocument } from '../../../.agents/skills/test-case-designer/scripts/validate-test-cases.js';
 
 interface SubtreeInput {
   type: string;
@@ -424,6 +426,45 @@ export function registerTools(
           },
         ],
       };
+    },
+  );
+
+  server.tool(
+    'validate_document',
+    [
+      '对当前脑图执行 test-case-designer 质量门禁（结构/字段/追溯/重复/优先级/文本完整性）。',
+      '生成或修订用例后必须调用；返回 errors/warnings/stats 与修复建议。',
+      'errors 必须修复后重新写入；warnings 逐条判断并在备注说明理由。',
+    ].join(' '),
+    {},
+    async () => {
+      try {
+        const doc = store().toJSON();
+        const result = validateDocument(doc);
+        const summary = [
+          `ERROR ${result.errors.length} 条；WARN ${result.warnings.length} 条`,
+          `用例 ${result.stats.cases} 条；P0 ${result.stats.priorities.P0} / P1 ${result.stats.priorities.P1} / P2 ${result.stats.priorities.P2} / P3 ${result.stats.priorities.P3}`,
+          `P0 占比 ${(result.stats.p0Ratio * 100).toFixed(1)}%；可追溯 ${(result.stats.traceabilityRatio * 100).toFixed(1)}%`,
+        ].join(' · ');
+        const formatIssues = (issues: Array<{ code: string; message: string; nodeId?: string; title?: string }>): string[] =>
+          issues.map((i) => `- ${i.code}: ${i.message}${i.title ? `（「${i.title}」）` : ''}${i.nodeId ? ` [${i.nodeId}]` : ''}`);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: [
+                summary,
+                result.errors.length ? '\nERROR（必须修复）:' : '',
+                ...formatIssues(result.errors),
+                result.warnings.length ? '\nWARN（逐条判断）:' : '',
+                ...formatIssues(result.warnings),
+              ].filter(Boolean).join('\n'),
+            },
+          ],
+        };
+      } catch (e) {
+        return err(e);
+      }
     },
   );
 }

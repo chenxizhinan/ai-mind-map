@@ -11,7 +11,7 @@
  *
  * 用法：
  *   node .agents/skills/test-case-designer/scripts/validate-test-cases.js <file-or-dir> [...]
- *        [--strict] [--json] [--max-depth=4] [--max-p0-ratio=0.35]
+ *        [--strict] [--json] [--max-depth=5] [--max-p0-ratio=0.35]
  *        [--require-p0] [--require-p1] [--warn-all-p0-branches]
  *        [--max-duplicate-ratio=0.05] [--quiet]
  *
@@ -22,8 +22,8 @@ import { join, extname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_OPTIONS = {
-  /** 文件夹建议最大深度；null 表示不检查 */
-  maxFolderDepth: 4,
+  /** 文件夹最大深度；null 表示不检查 */
+  maxFolderDepth: 5,
   /** P0 占比复核阈值；只是 WARN 探针，不用于反向分配优先级 */
   maxP0Ratio: 0.35,
   /** 是否要求文档至少包含一个 P0 / P1 */
@@ -37,6 +37,8 @@ export const DEFAULT_OPTIONS = {
   similarity: 0.92,
   /** 参与相似度检查的最大用例数，避免超大文档 O(n²) 过慢 */
   similarityLimit: 800,
+  /** 同一测试条件下的用例数达到该值时提示“条件可能过粗” */
+  maxCasesPerCondition: 4,
 };
 
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
@@ -71,6 +73,18 @@ const CASE_ID_HINT = /\bCASE-[A-Z0-9_-]+\b/i;
 const CONDITION_ID_HINT = /\bTCND-[A-Z0-9_-]+\b/i;
 const MULTI_POINT_TITLE = /[；;]/;
 const TITLE_MAX_LENGTH = 100;
+
+/** 从 remark 中提取 CASE-* ID；用于唯一性和追溯统计 */
+function extractCaseId(remark) {
+  const match = CASE_ID_HINT.exec(String(remark ?? ''));
+  return match ? match[0] : null;
+}
+
+/** 从 remark 中提取 TCND-* ID；用于条件粒度统计 */
+function extractConditionId(remark) {
+  const match = CONDITION_ID_HINT.exec(String(remark ?? ''));
+  return match ? match[0] : null;
+}
 
 const IMPLEMENTATION_IDENTIFIERS = [
   { label: '接口路径', pattern: /(?:^|\s)\/(?:api|v\d+)(?:\/|\b)/i },
@@ -212,6 +226,8 @@ export function validateDocument(doc, options = {}) {
   };
   walk(doc.tree, 0, null, []);
 
+  // ---- 用例层级结构：e2e 断言仍应保持业务可见语言，技术契约细节下沉到低层级或备注 ----
+
   // 每个分组下的后代用例数（用于发现“有子目录但没有用例”的空分组）
   const descendantCases = new Map();
   const countCases = (node) => {
@@ -251,6 +267,8 @@ export function validateDocument(doc, options = {}) {
   /** @type {Map<string, Array>} */
   const titleGroups = new Map();
   const stepTexts = [];
+  /** 同一 TCND 下的用例列表，用于检查条件粒度 */
+  const conditionGroups = new Map();
 
   for (const item of cases) {
     const { node, depth } = item;
@@ -263,6 +281,8 @@ export function validateDocument(doc, options = {}) {
     const caseType = String(props.caseType ?? '').trim();
     const testLevel = String(props.testLevel ?? '').trim();
     const remark = String(props.remark ?? '').trim();
+    const caseId = extractCaseId(remark);
+    const conditionId = extractConditionId(remark);
 
     if (!title) addIssue(errors, 'case.title-empty', '用例标题为空', item);
 
@@ -346,6 +366,13 @@ export function validateDocument(doc, options = {}) {
       if (!titleGroups.has(key)) titleGroups.set(key, []);
       titleGroups.get(key).push(item);
     }
+    if (conditionId) {
+      const group = conditionGroups.get(conditionId) ?? [];
+      group.push(item);
+      conditionGroups.set(conditionId, group);
+    }
+    item.caseId = caseId;
+    item.conditionId = conditionId;
     if (opts.maxFolderDepth !== null && depth - 1 > opts.maxFolderDepth) {
       addIssue(
         warnings,
@@ -367,6 +394,43 @@ export function validateDocument(doc, options = {}) {
       code: 'duplicate.title',
       nodeId: group[0].node.id,
       message: `重复标题 ${group.length} 次：「${firstLine(group[0].node.text)}」`,
+    });
+  }
+
+  // 测试条件粒度：同一 TCND 下用例过多，通常说明条件停留在模块级而不是“可独立验证的行为”。
+
+  // 稳定用例 ID 唯一性：同一 CASE-ID 复用到不同用例会直接破坏追溯链，属于 ERROR。
+  const caseIdGroups = new Map();
+  for (const item of cases) {
+    if (!item.caseId) continue;
+    const group = caseIdGroups.get(item.caseId) ?? [];
+    group.push(item);
+    caseIdGroups.set(item.caseId, group);
+  }
+  for (const [caseId, group] of caseIdGroups) {
+    if (group.length < 2) continue;
+    const paths = group.map((item) => [...item.ancestors, item.node.text].join(' / '));
+    errors.push({
+      code: 'trace.case-id-duplicate',
+      nodeId: group[0].node.id,
+      message: `稳定用例 ID「${caseId}」被 ${group.length} 条用例复用：${paths
+        .map((path) => `「${firstLine(path, 40)}」`)
+        .join('、')}；每条用例必须有唯一 CASE-*`,
+    });
+  }
+
+  // 测试条件粒度：同一 TCND 下用例过多，通常说明条件停留在模块级而不是“可独立验证的行为”。
+  for (const [conditionId, group] of conditionGroups) {
+    if (group.length <= opts.maxCasesPerCondition) continue;
+    const paths = [...new Set(group.map((item) => item.ancestors.join(' / ')))];
+    warnings.push({
+      code: 'trace.condition-too-broad',
+      nodeId: group[0].node.id,
+      message: `测试条件「${conditionId}」下有 ${group.length} 条用例，可能停留在模块级而非可独立验证的行为；` +
+        `请拆分为更细测试条件，并保留用例间输入/状态/层级差异：${paths
+          .map((path) => `「${firstLine(path, 30)}」`)
+          .slice(0, 3)
+          .join('、')}${paths.length > 3 ? ' 等' : ''}`,
     });
   }
   if (stats.cases >= 5 && duplicateCases / stats.cases > opts.maxDuplicateRatio) {
@@ -502,7 +566,7 @@ function parseFlags(argv) {
     else if (arg === '--json') json = true;
     else if (arg === '--quiet') quiet = true;
     else if (arg === '--help' || arg === '-h') {
-      console.log('用法: node validate-test-cases.js <file-or-dir> [...] [--strict] [--json] [--max-depth=4] [--max-p0-ratio=0.35] [--require-p0] [--require-p1] [--warn-all-p0-branches] [--max-duplicate-ratio=0.05] [--quiet]');
+      console.log('用法: node validate-test-cases.js <file-or-dir> [...] [--strict] [--json] [--max-depth=5] [--max-p0-ratio=0.35] [--require-p0] [--require-p1] [--warn-all-p0-branches] [--max-duplicate-ratio=0.05] [--quiet]');
       process.exit(0);
     } else if (arg === '--require-p0') options.requireP0 = true;
     else if (arg === '--require-p1') options.requireP1 = true;

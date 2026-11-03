@@ -8,6 +8,8 @@ export interface DocEntry {
   nodeCount?: number;
   /** 内容尚未拉到本地槽位（bridge 侧新建/吸收的文档） */
   remoteOnly?: boolean;
+  /** 首次使用自动创建的演示文档：不自动挂载到 bridge，用户真正编辑后才参与同步 */
+  demo?: boolean;
 }
 
 export interface BridgeDocInfo {
