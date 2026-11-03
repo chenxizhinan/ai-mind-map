@@ -4,7 +4,8 @@ apps/app/dist
 dist-server
 .git
 .github
-.agents
+.agents/skills/test-case-designer/agents
+.agents/skills/test-case-designer/references
 mindmaps
 *.log
 .DS_Store

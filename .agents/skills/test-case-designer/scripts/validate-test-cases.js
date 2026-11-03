@@ -19,7 +19,6 @@
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, extname } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_OPTIONS = {
   /** 文件夹最大深度；null 表示不检查 */
@@ -615,5 +614,6 @@ export function main(argv = process.argv.slice(2)) {
   return totalErrors > 0 || (strict && totalWarnings > 0) ? 1 : 0;
 }
 
-const isCli = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+// Bundlers preserve import.meta.url as the bundle URL, so identify this CLI by its filename only.
+const isCli = process.argv[1] && /(^|\/)validate-test-cases\.(m|c)?js$/.test(process.argv[1]);
 if (isCli) process.exit(main());
