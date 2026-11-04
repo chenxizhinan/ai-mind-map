@@ -67,6 +67,32 @@ describe('bridge', () => {
     expect(JSON.parse(readFileSync(ctx.filePath, 'utf8')).tree.children[0].text).toBe('m');
   });
 
+  it('PUT /doc enforces If-Match in single-file mode', async () => {
+    const ctx = setup();
+    cleanupDirs.push(ctx.dir);
+    openHandles.push(ctx.handle);
+    const port = await ctx.ready;
+    const v1 = ctx.getStore().document.meta.updatedAt;
+
+    const stale = await fetch(`http://localhost:${port}/doc`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'If-Match': '2000-01-01T00:00:00.000Z' },
+      body: JSON.stringify(ctx.getStore().toJSON()),
+    });
+    expect(stale.status).toBe(409);
+
+    const good = await fetch(`http://localhost:${port}/doc`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'If-Match': v1 },
+      body: JSON.stringify(ctx.getStore().toJSON()),
+    });
+    expect(good.ok).toBe(true);
+    const r = (await good.json()) as { updatedAt?: string };
+    expect(r.updatedAt).toBeTruthy();
+    // 落盘后版本被 save() 刷新
+    expect(JSON.parse(readFileSync(ctx.filePath, 'utf8')).meta.updatedAt).toBe(r.updatedAt);
+  });
+
   it('PUT /doc preserves UTF-8 text when request chunks split a Chinese character', async () => {
     const ctx = setup();
     cleanupDirs.push(ctx.dir);
@@ -282,14 +308,14 @@ describe('bridge dir mode (multi-doc)', () => {
     };
     expect(back.tree.children[0].text).toBe('模块X');
 
-    // 未知 id PUT 自建文件
+    // 未知 id PUT 拒绝自建文件（404）：防止已删除文档被离线浏览器的自动保存"复活"
     const ok2 = await fetch(`http://localhost:${port}/doc/${encodeURIComponent('自愈-id')}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(minimalDoc('自愈')),
     });
-    expect(ok2.ok).toBe(true);
-    expect(existsSync(join(ctx.docsDir, '自愈-id.mindmap.json'))).toBe(true);
+    expect(ok2.status).toBe(404);
+    expect(existsSync(join(ctx.docsDir, '自愈-id.mindmap.json'))).toBe(false);
   });
 
   it('POST /docs with stable id is idempotent; DELETE /doc/:id removes the file', async () => {
@@ -377,6 +403,77 @@ describe('bridge dir mode (multi-doc)', () => {
     ])) as string;
     const parsed = JSON.parse(data) as { docId?: string };
     expect(parsed.docId).toBe('外部新增');
+  });
+
+  it('PUT /doc/:id enforces If-Match optimistic lock (stale version → 409)', async () => {
+    const ctx = setupDir();
+    cleanupDirs.push(ctx.dir);
+    openHandles.push(ctx.handle);
+    const port = await ctx.ready;
+    const created = (await (
+      await fetch(`http://localhost:${port}/docs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: '锁测试' }),
+      })
+    ).json()) as { id: string };
+
+    // 首次 PUT（无 If-Match）成功，响应返回落盘后的版本号
+    const put1 = await fetch(`http://localhost:${port}/doc/${encodeURIComponent(created.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(minimalDoc('锁测试')),
+    });
+    expect(put1.ok).toBe(true);
+    const r1 = (await put1.json()) as { updatedAt?: string };
+    const v1 = ctx.docs.byId(created.id)!.document.meta.updatedAt;
+    expect(r1.updatedAt).toBe(v1);
+
+    // 过期版本 → 409，并带回服务端当前版本
+    const stale = await fetch(`http://localhost:${port}/doc/${encodeURIComponent(created.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'If-Match': '2000-01-01T00:00:00.000Z' },
+      body: JSON.stringify(minimalDoc('过期写入')),
+    });
+    expect(stale.status).toBe(409);
+    const r2 = (await stale.json()) as { currentUpdatedAt?: string };
+    expect(r2.currentUpdatedAt).toBe(v1);
+    // 过期写入未生效
+    expect(ctx.docs.byId(created.id)!.document.meta.title).toBe('锁测试');
+
+    // 正确版本 → 200，返回刷新后的版本号
+    const fresh = await fetch(`http://localhost:${port}/doc/${encodeURIComponent(created.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'If-Match': v1 },
+      body: JSON.stringify(minimalDoc('锁测试-v2')),
+    });
+    expect(fresh.ok).toBe(true);
+    const r3 = (await fresh.json()) as { updatedAt?: string };
+    const v2 = ctx.docs.byId(created.id)!.document.meta.updatedAt;
+    expect(r3.updatedAt).toBe(v2);
+    expect(v2).not.toBe(v1);
+
+    // 上一次成功写入前拿到的版本再写 → 409
+    const replay = await fetch(`http://localhost:${port}/doc/${encodeURIComponent(created.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'If-Match': v1 },
+      body: JSON.stringify(minimalDoc('重放写入')),
+    });
+    expect(replay.status).toBe(409);
+  });
+
+  it('PUT /doc/:id to unknown id 404s in dir mode (no silent file resurrection)', async () => {
+    const ctx = setupDir();
+    cleanupDirs.push(ctx.dir);
+    openHandles.push(ctx.handle);
+    const port = await ctx.ready;
+    const res = await fetch(`http://localhost:${port}/doc/${encodeURIComponent('已删除文档')}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(minimalDoc('不该被重建')),
+    });
+    expect(res.status).toBe(404);
+    expect(existsSync(join(ctx.docsDir, '已删除文档.mindmap.json'))).toBe(false);
   });
 });
 

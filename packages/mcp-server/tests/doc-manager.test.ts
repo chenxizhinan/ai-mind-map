@@ -209,4 +209,33 @@ describe('tools with {docs} context', () => {
     expect(list).toHaveLength(1);
     expect(list[0].id).toBe('default');
   });
+
+  it('persist refuses to overwrite when the file was modified by another process', async () => {
+    const { utimesSync } = await import('node:fs');
+    const dir = mkdtempSync(join(tmpdir(), 'aimm-ext-'));
+    dirs.push(dir);
+    const m = new DirDocManager(makeRegistry(), dir);
+    const { id } = m.createDoc({ title: '并发目标' });
+    const fp = join(dir, `${id}.mindmap.json`);
+    // 模拟另一进程修改了同一文件（内容 + 强制不同 mtime，避免时间粒度抖动）
+    const raw = JSON.parse(readFileSync(fp, 'utf8')) as { meta: { title: string } };
+    raw.meta.title = '别人改的';
+    writeFileSync(fp, JSON.stringify(raw), 'utf8');
+    const t = new Date(Date.now() + 5000);
+    utimesSync(fp, t, t);
+    expect(() => m.persist(id)).toThrow(/已被其他进程修改/);
+    // 内存副本被丢弃：重新加载拿到的是外部修改后的内容
+    expect(m.byId(id)!.document.meta.title).toBe('别人改的');
+  });
+
+  it('persist refuses to resurrect a file deleted on disk', async () => {
+    const { unlinkSync } = await import('node:fs');
+    const dir = mkdtempSync(join(tmpdir(), 'aimm-del-'));
+    dirs.push(dir);
+    const m = new DirDocManager(makeRegistry(), dir);
+    const { id } = m.createDoc({ title: '待删除' });
+    unlinkSync(join(dir, `${id}.mindmap.json`));
+    expect(() => m.persist(id)).toThrow(/被删除/);
+    expect(existsSync(join(dir, `${id}.mindmap.json`))).toBe(false);
+  });
 });

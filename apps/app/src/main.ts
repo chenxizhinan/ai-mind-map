@@ -128,6 +128,14 @@ function snapshot(): void {
   if (suppress || !store) return;
   // 用户显式编辑占位文档：视为接受当前内容，恢复正常落盘/推送（bridge 离线时不至于永远锁死）
   pendingRemoteFill = false;
+  // 用户显式编辑「本地专用文档」（冲突备份等）：它升级为普通文档，恢复参与同步
+  if (currentDocId) {
+    const entry = loadDocsIndex().find((x) => x.id === currentDocId);
+    if (entry?.keepLocalOnly) {
+      entry.keepLocalOnly = false;
+      saveDocsIndex(loadDocsIndex().map((x) => (x.id === currentDocId ? entry : x)));
+    }
+  }
   history.push(JSON.stringify(store.toJSON()));
   if (history.length > MAX_HISTORY) history.shift();
   future = [];
@@ -2150,6 +2158,8 @@ const BRIDGE_URL = (
 const lastPushAtByRemote = new Map<string, number>();
 /** 按文档记录的最近拉取时间：拉取触发的重排不应再回推（否则形成 PUT↔GET 回声循环） */
 const lastPullAtByRemote = new Map<string, number>();
+/** 按文档记录的远端版本（meta.updatedAt）：PUT 带 If-Match 乐观锁，防止并发写互相覆盖 */
+const remoteVersionByRemote = new Map<string, string>();
 /** true = bridge 已确认为多文档模式（GET /docs 可用） */
 let bridgeMultiDoc = false;
 
@@ -2177,6 +2187,7 @@ async function pullRemote(docId?: string): Promise<void> {
     const res = await fetch(url);
     if (!res.ok) return;
     const d = (await res.json()) as MindDocument;
+    if (rid) remoteVersionByRemote.set(rid, d.meta.updatedAt ?? ''); // 记录远端版本（If-Match 用）
     if (currentDocId) touchDocEntry(currentDocId, d.meta.title || '未命名导图');
     // 远端替换内容时保留当前视图状态；若涉及节点增删，relayout 会自动过滤失效 id
     const currentExpanded = expandedIds;
@@ -2297,6 +2308,7 @@ async function ensureRemoteDoc(docId: string, title: string): Promise<string | n
   const entry = loadDocsIndex().find((e) => e.id === docId);
   if (!entry) return null; // 索引外的临时文档不推送，避免生成孤儿文档
   if (entry.demo) return null; // 演示文档不自动挂载：避免每个新浏览器/服务器都长出一份演示副本
+  if (entry.keepLocalOnly) return null; // 本地专用文档（冲突备份等）：用户显式编辑后才参与同步
   if (entry.remoteId) return entry.remoteId;
   const inflight = remoteMounts.get(docId);
   if (inflight) return inflight;
@@ -2345,6 +2357,49 @@ function rollbackRemoteId(docId: string, stableId: string): void {
   }
 }
 
+/**
+ * PUT 收到 409（乐观锁）：文档已被其他浏览器/Agent 写过。
+ * 内容一致 → 仅更新版本号（回声）；内容不同 → 先把本地版本备份为独立本地文档，
+ * 再加载远端最新内容。绝不静默覆盖他人修改，也不丢自己的修改。
+ */
+async function handleRemoteConflict(rid: string): Promise<void> {
+  try {
+    const res = await fetch(`${BRIDGE_URL}/doc/${encodeURIComponent(rid)}`);
+    if (!res.ok) return;
+    const remote = (await res.json()) as MindDocument;
+    lastPullAtByRemote.set(rid, Date.now());
+    remoteVersionByRemote.set(rid, remote.meta.updatedAt ?? '');
+    const sameContent =
+      doc.tree === remote.tree ||
+      (JSON.stringify({ t: doc.tree, a: doc.annotations }) ===
+        JSON.stringify({ t: remote.tree, a: remote.annotations }) &&
+        doc.meta.title === remote.meta.title);
+    if (sameContent) {
+      syncDocTitle();
+      return;
+    }
+    const backupId = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const stamp = new Date().toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const backupTitle = `${doc.meta.title || '未命名导图'}（冲突备份 ${stamp}）`;
+    try {
+      localStorage.setItem(DOC_PREFIX + backupId, JSON.stringify(store.toJSON()));
+      const entries = loadDocsIndex();
+      entries.unshift({ id: backupId, title: backupTitle, updatedAt: Date.now(), keepLocalOnly: true });
+      saveDocsIndex(entries);
+    } catch {
+      /* 存储满：放弃备份也要加载远端最新，避免停留在过期版本上继续编辑 */
+    }
+    pendingRemoteFill = false;
+    loadDoc(remote, true);
+    syncDocTitle();
+    toast(`远端文档已被他人修改：你的版本已备份为「${backupTitle}」，当前显示远端最新内容`, 'warn');
+    const home = document.getElementById('home-view');
+    if (home && home.style.display !== 'none') renderHome();
+  } catch {
+    /* bridge 不可达：保持本地内容，下次保存会再次尝试 */
+  }
+}
+
 async function pushRemote(): Promise<void> {
   const senderId = currentDocId;
   if (!senderId) return;
@@ -2365,11 +2420,30 @@ async function pushRemote(): Promise<void> {
         return;
       }
       lastPushAtByRemote.set(rid, Date.now());
-      await fetch(`${BRIDGE_URL}/doc/${encodeURIComponent(rid)}`, {
+      // If-Match 乐观锁：版本过期（他人已写入）时服务端返回 409，走冲突处理而不是覆盖
+      const version = remoteVersionByRemote.get(rid);
+      const res = await fetch(`${BRIDGE_URL}/doc/${encodeURIComponent(rid)}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(version ? { 'If-Match': version } : {}),
+        },
         body: payload,
       });
+      if (res.ok) {
+        const r = (await res.json().catch(() => null)) as { updatedAt?: string } | null;
+        if (r?.updatedAt) remoteVersionByRemote.set(rid, r.updatedAt);
+      } else if (res.status === 409) {
+        await handleRemoteConflict(rid);
+      } else if (res.status === 404) {
+        // 远端文档已被删除：清掉失效 remoteId 并同步列表，避免反复往已删除的 id 写（复活文件）
+        const cur = loadDocsIndex().find((e) => e.id === senderId);
+        if (cur && cur.remoteId === rid) {
+          delete cur.remoteId;
+          saveDocsIndex(loadDocsIndex().map((e) => (e.id === senderId ? cur : e)));
+        }
+        void syncDocsFromBridge();
+      }
     } else {
       // 遗留单文档 bridge（POST /docs 400/404）：写 /doc 兼容端点
       lastPushAtByRemote.set('#legacy', Date.now());
@@ -2461,6 +2535,7 @@ async function fillRemoteInto(id: string, remoteId: string, allowRetry = true): 
     const remote = (await res.json()) as MindDocument;
     if (currentDocId !== id) return; // 用户可能已经切走：仅当仍停在本条目时落盘+装载
     pendingRemoteFill = false; // 真实内容已取回：恢复正常落盘/推送
+    remoteVersionByRemote.set(remoteId, remote.meta.updatedAt ?? ''); // 记录远端版本（If-Match 用）
     localStorage.setItem(DOC_PREFIX + id, JSON.stringify(remote));
     const idx = loadDocsIndex().find((e) => e.id === id);
     if (idx?.remoteOnly) {

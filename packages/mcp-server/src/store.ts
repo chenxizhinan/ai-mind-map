@@ -42,6 +42,9 @@ export function loadOrCreate(filePath: string, registry: NodeTypeRegistry): DocS
 export function save(store: DocStore, filePath: string): void {
   const abs = resolve(filePath);
   mkdirSync(dirname(abs), { recursive: true });
+  // 版本戳：每次落盘刷新 meta.updatedAt。它是浏览器 PUT /doc/:id（If-Match 乐观锁）
+  // 与多端并发写同一文档时的版本基准——后写者版本过期会收到 409，而不是静默覆盖他人修改。
+  store.document.meta.updatedAt = new Date().toISOString();
   writeFileSync(abs, JSON.stringify(store.toJSON(), null, 2), 'utf8');
 }
 

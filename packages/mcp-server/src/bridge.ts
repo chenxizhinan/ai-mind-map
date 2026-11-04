@@ -201,7 +201,7 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
     // 本地工具，开放 CORS 便于应用从任意端口 dev server 访问
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, POST, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, If-Match');
     if (req.method === 'OPTIONS') {
       res.writeHead(204).end();
       return;
@@ -324,13 +324,20 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
           return;
         }
         const raw = await readBody(req);
+        const ifMatchLegacy = req.headers['if-match'];
         await enqueue(async () => {
+          const cur = docs.store();
+          const curVersion = cur.document.meta.updatedAt;
+          if (typeof ifMatchLegacy === 'string' && ifMatchLegacy.length && curVersion && ifMatchLegacy !== curVersion) {
+            json(res, 409, { error: '文档已被其他客户端修改', currentUpdatedAt: curVersion });
+            return;
+          }
           const d = JSON.parse(raw);
           docs.putDoc('default', d);
           lastMtime = statSync(singleFilePath!).mtimeMs;
           broadcast('default', docs.store().document.meta.title);
+          json(res, 200, { ok: true, id: 'default', updatedAt: docs.store().document.meta.updatedAt });
         });
-        json(res, 200, { ok: true });
         return;
       }
 
@@ -365,15 +372,37 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
         }
         // PUT /doc/:id
         const raw = await readBody(req);
+        // If-Match 乐观锁：携带客户端最后看到的 meta.updatedAt（save() 每次落盘都会刷新）。
+        // 不匹配 = 文档已被其他浏览器/Agent 写过 → 409，客户端拉取最新并备份自己的修改，
+        // 而不是静默整树覆盖。
+        const ifMatch = req.headers['if-match'];
         await enqueue(async () => {
+          const current = isDir ? docs.byId(rawId) : docs.store();
+          if (isDir && !current) {
+            // dir 模式下未知 id 一律 404：不再静默自建文件，
+            // 否则已删除文档会被离线浏览器的自动保存反复"复活"。
+            json(res, 404, { error: `document not found: ${rawId}` });
+            return;
+          }
+          if (typeof ifMatch === 'string' && ifMatch.length && current) {
+            const curVersion = current.document.meta.updatedAt;
+            if (curVersion && curVersion !== ifMatch) {
+              json(res, 409, { error: '文档已被其他客户端修改', currentUpdatedAt: curVersion });
+              return;
+            }
+          }
           const d = JSON.parse(raw);
           docs.putDoc(rawId, d);
           if (!isDir) {
             lastMtime = statSync(singleFilePath!).mtimeMs;
           }
           broadcast(rawId, (isDir ? docs.byId(rawId) : docs.store())?.document.meta.title);
+          json(res, 200, {
+            ok: true,
+            id: rawId,
+            updatedAt: (isDir ? docs.byId(rawId) : docs.store())?.document.meta.updatedAt,
+          });
         });
-        json(res, 200, { ok: true });
         return;
       }
 

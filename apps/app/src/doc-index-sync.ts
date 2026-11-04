@@ -10,6 +10,8 @@ export interface DocEntry {
   remoteOnly?: boolean;
   /** 旧版自动生成的演示文档残留（现已清除）：不自动挂载到 bridge，启动时会被清理 */
   demo?: boolean;
+  /** 本地专用文档（如冲突备份）：不自动挂载到 bridge；用户显式编辑后解除，恢复参与同步 */
+  keepLocalOnly?: boolean;
 }
 
 export interface BridgeDocInfo {

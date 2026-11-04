@@ -142,9 +142,24 @@ export class DirDocManager implements DocContext {
     if (!id) return;
     const slot = this.loadSlot(id);
     if (!slot) return;
+    const fp = this.fileOf(id);
+    // 落盘前防串写校验：文件被其他进程（另一 MCP 实例/手工编辑）改过或删除时拒绝写，
+    // 避免用本进程内存里的旧副本覆盖别人的修改；删除后的写入也不再"复活"文件。
+    let diskMtime: number;
+    try {
+      diskMtime = statSync(slot.filePath).mtimeMs;
+    } catch {
+      this.slots.delete(id);
+      throw new Error(`文档 ${id} 已在磁盘上被删除；请先 list_documents 确认后再操作`);
+    }
+    const knownM = this.known.get(fp);
+    if (knownM !== undefined && diskMtime !== knownM) {
+      this.slots.delete(id); // 丢弃内存副本，下次按 id 重载最新内容
+      throw new Error(`文档 ${id} 已被其他进程修改；请重新 open_document 获取最新内容后重试`);
+    }
     save(slot.store, slot.filePath);
     this.dirty.add(id);
-    this.known.set(this.fileOf(id), statSync(slot.filePath).mtimeMs);
+    this.known.set(fp, statSync(slot.filePath).mtimeMs);
   }
 
   listDocs(): DocSummary[] {
