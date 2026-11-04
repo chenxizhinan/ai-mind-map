@@ -8,7 +8,7 @@ export interface DocEntry {
   nodeCount?: number;
   /** 内容尚未拉到本地槽位（bridge 侧新建/吸收的文档） */
   remoteOnly?: boolean;
-  /** 首次使用自动创建的演示文档：不自动挂载到 bridge，用户真正编辑后才参与同步 */
+  /** 旧版自动生成的演示文档残留（现已清除）：不自动挂载到 bridge，启动时会被清理 */
   demo?: boolean;
 }
 
@@ -31,7 +31,8 @@ export interface ReconciledDocsIndex {
  *
  * 有 remoteId 的条目只是 bridge 文档的本地镜像；远端被删除后必须一并删除，
  * 否则把 remoteId 清空会把已删除的镜像变成新的本地文档，首页会永久出现副本。
- * 从未关联 bridge（没有 remoteId）的本地草稿不受影响。
+ * 从未关联 bridge（没有 remoteId）的本地草稿不受影响；首次使用的演示文档（demo）
+ * 永不按标题吸收绑定，避免与远端同名文档（含历史污染副本）错误关联。
  */
 export function reconcileDocsIndex(
   sourceEntries: DocEntry[],
@@ -58,7 +59,8 @@ export function reconcileDocsIndex(
     const local =
       titleCount.get(bridgeDoc.title) === 1 && (!existing || existing.remoteOnly)
         ? entries.find(
-            (entry) => !entry.remoteOnly && entry.title === bridgeDoc.title && !entry.remoteId,
+            (entry) =>
+              !entry.remoteOnly && !entry.demo && entry.title === bridgeDoc.title && !entry.remoteId,
           )
         : undefined;
     const updatedAt = Date.parse(bridgeDoc.updatedAt) || Date.now();

@@ -47,27 +47,12 @@ import {
 const registry = new NodeTypeRegistry();
 registerBuiltinTypes(registry);
 
-// ---------- 演示数据（仅首次启动生成） ----------
-function makeDemo(): MindDocument {
-  const s = new DocStore(registry, {
-    meta: { title: '订单中心 · 回归测试', updatedAt: new Date().toISOString() },
-  });
-  const modules = ['创建订单', '支付', '退款', '发货', '售后', '优惠券', '库存', '物流', '发票', '地址'];
-  const prios = ['P0', 'P1', 'P2', 'P3'] as const;
-    for (let i = 0; i < 120; i++) {
-    const mod = modules[i % modules.length];
-    s.addSubtree(s.root.id, {
-      type: 'folder',
-      text: `${mod}-${String(i).padStart(3, '0')}`,
-      children: Array.from({ length: 100 }, (_, j) => ({
-        type: 'case',
-        text: `${mod}场景${j + 1}：测试场景模板`,
-        props: { priority: prios[j % 4] },
-      })),
-    });
-  }
-  return s.toJSON();
-}
+// ---------- 演示文档已移除 ----------
+// 旧版会在首次使用时自动生成演示文档「订单中心 · 回归测试」（1.2 万节点模板数据）。
+// 它曾被 openDoc 的占位逻辑当成真实内容推送/覆盖到 bridge，造成线上真实用例被清空；
+// 且该内容本就不应出现在业务部署里。现彻底移除生成逻辑，仅保留标题常量用于
+// 启动时清理旧浏览器里残留的演示副本（见 purgeDemoDocs）。
+const DEMO_TITLE = '订单中心 · 回归测试';
 
 function blankDoc(title = '新导图'): MindDocument {
   const s = new DocStore(registry, {
@@ -92,7 +77,7 @@ function saveLocal(): void {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    persistCurrent();
+    if (!pendingRemoteFill) persistCurrent(); // 占位等待远端填充期间不落盘
     if (currentDocId) {
       try {
         localStorage.setItem(LS_EXPANDED + ':' + currentDocId, JSON.stringify([...(expandedIds ?? [])]));
@@ -125,6 +110,13 @@ let editingId = false;
 /** 当前编辑节点 id（编辑中禁用快捷键/撤销） */
 let editingNodeId: string | null = null;
 
+/**
+ * true = 当前文档内容是「空白占位」，正在等待 bridge 填充真实内容。
+ * 占位期间禁止落盘/推送：曾因把演示文档当占位装载并自动保存，
+ * 将 bridge 上的真实文档覆盖成了「订单中心 · 回归测试」。
+ */
+let pendingRemoteFill = false;
+
 // ---------- 历史栈（撤销/重做） ----------
 const MAX_HISTORY = 100;
 let history: string[] = [];
@@ -134,6 +126,8 @@ let suppress = false;
 /** 在 mutation 之前调用，保存变更前状态 */
 function snapshot(): void {
   if (suppress || !store) return;
+  // 用户显式编辑占位文档：视为接受当前内容，恢复正常落盘/推送（bridge 离线时不至于永远锁死）
+  pendingRemoteFill = false;
   history.push(JSON.stringify(store.toJSON()));
   if (history.length > MAX_HISTORY) history.shift();
   future = [];
@@ -641,7 +635,7 @@ function persistExpandedNow(): void {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
-  persistCurrent();
+  if (!pendingRemoteFill) persistCurrent(); // 占位等待远端填充期间不落盘
   if (currentDocId) {
     try {
       localStorage.setItem(LS_EXPANDED + ':' + currentDocId, JSON.stringify([...(expandedIds ?? [])]));
@@ -2197,6 +2191,7 @@ async function pullRemote(docId?: string): Promise<void> {
       syncDocTitle();
       return;
     }
+    pendingRemoteFill = false; // 远端真实内容已取回（含占位期间的 SSE 变更）：恢复正常保存
     loadDoc(d, true); // keepViewport: 平移缩放不动，只换数据
     expandedIds = currentExpanded;
     relayout();
@@ -2353,6 +2348,11 @@ function rollbackRemoteId(docId: string, stableId: string): void {
 async function pushRemote(): Promise<void> {
   const senderId = currentDocId;
   if (!senderId) return;
+  // 占位内容（空白/等待远端填充）绝不推送：曾把演示/空白内容覆盖到真实 bridge 文档上
+  if (pendingRemoteFill) return;
+  // 演示文档与索引外文档一律不推送：否则会走下面的 /doc 遗留兼容端点，把演示内容写到远端
+  const senderEntry = loadDocsIndex().find((e) => e.id === senderId);
+  if (!senderEntry || senderEntry.demo) return;
   // 先快照内容与标题：await 期间用户可能切走文档，不能把 B 的内容写进 A 的 bridge 文档
   const payload = JSON.stringify(doc);
   const title = store.document.meta.title || '未命名导图';
@@ -2449,6 +2449,37 @@ function persistCurrent(): void {
   }
 }
 
+/**
+ * 从 bridge 拉取 remoteId 的内容填充当前打开的文档槽位；失败时自动重试一次。
+ * 填充成功前 pendingRemoteFill=true：空白占位既不落盘也不推送，
+ * 避免把占位内容覆盖到 bridge 上的真实文档。
+ */
+async function fillRemoteInto(id: string, remoteId: string, allowRetry = true): Promise<void> {
+  try {
+    const res = await fetch(`${BRIDGE_URL}/doc/${encodeURIComponent(remoteId)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const remote = (await res.json()) as MindDocument;
+    if (currentDocId !== id) return; // 用户可能已经切走：仅当仍停在本条目时落盘+装载
+    pendingRemoteFill = false; // 真实内容已取回：恢复正常落盘/推送
+    localStorage.setItem(DOC_PREFIX + id, JSON.stringify(remote));
+    const idx = loadDocsIndex().find((e) => e.id === id);
+    if (idx?.remoteOnly) {
+      idx.remoteOnly = false;
+      saveDocsIndex(loadDocsIndex().map((e) => (e.id === id ? { ...e, remoteOnly: false } : e)));
+    }
+    lastPullAtByRemote.set(remoteId, Date.now()); // 内容源自 bridge：抑制紧接着的回推
+    loadDoc(remote, false);
+    syncDocTitle();
+  } catch {
+    /* bridge 未启动 / 文档已删除：保持空白占位；稍后自动重试一次 */
+    if (allowRetry) {
+      setTimeout(() => {
+        if (currentDocId === id && pendingRemoteFill) void fillRemoteInto(id, remoteId, false);
+      }, 3000);
+    }
+  }
+}
+
 /** 打开一个文档（从其槽位加载，失效则新建；remoteOnly 条目先从 bridge 拉内容） */
 function openDoc(id: string): void {
   const entry = loadDocsIndex().find((e) => e.id === id);
@@ -2466,25 +2497,13 @@ function openDoc(id: string): void {
   // 清空撤销栈：history 是全局的，跨文档恢复会把上一篇快照灌进当前文档
   history = [];
   future = [];
-  loadDoc(d ?? makeDemo(), false);
+  // 槽位为空（remoteOnly / 数据损坏）：装载「空白占位」而不是演示文档。
+  // 演示内容一旦被当作占位保存/推送，会把 bridge 上的真实文档覆盖成「订单中心 · 回归测试」。
+  pendingRemoteFill = !d;
+  loadDoc(d ?? blankDoc(entry?.title || '未命名导图'), false);
   // remoteOnly：内容还在 bridge 侧，异步拉取后刷新
   if (!d && entry?.remoteId) {
-    void (async () => {
-      try {
-        const res = await fetch(`${BRIDGE_URL}/doc/${encodeURIComponent(entry.remoteId!)}`);
-        if (!res.ok) return;
-        const remote = (await res.json()) as MindDocument;
-        // 用户可能已经切走：仅当仍停在本条目时落盘+装载
-        if (currentDocId !== id) return;
-        localStorage.setItem(DOC_PREFIX + id, JSON.stringify(remote));
-        entry.remoteOnly = false;
-        saveDocsIndex(loadDocsIndex().map((e) => (e.id === id ? { ...e, remoteOnly: false } : e)));
-        loadDoc(remote, false);
-        syncDocTitle();
-      } catch {
-        /* bridge 未启动：保持空文档 */
-      }
-    })();
+    void fillRemoteInto(id, entry.remoteId);
   }
   // 每文档独立的展开状态
   const rawExp = localStorage.getItem(LS_EXPANDED + ':' + id);
@@ -3021,20 +3040,22 @@ document.getElementById('home-btn')?.addEventListener('click', () => {
   localStorage.removeItem(LS_EXPANDED);
 })();
 
-if (!loadDocsIndex().length) {
-  // 首次使用：预置演示文档（demo 标记：不自动挂载到 bridge，真正编辑后才参与同步）
-  const id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const d = makeDemo();
-  try {
-    localStorage.setItem(DOC_PREFIX + id, JSON.stringify(d));
-    const entries = loadDocsIndex();
-    entries.unshift({ id, title: d.meta.title, updatedAt: Date.now(), demo: true });
-    saveDocsIndex(entries);
-    localStorage.setItem(LAST_DOC_KEY, id);
-  } catch {
-    /* ignore */
+// 旧版首次使用会预置演示文档（demo 标记）。演示文档已按需求彻底移除；
+// 这里清理旧浏览器 localStorage 里残留的演示副本：只清「demo 标记 + 仍是演示原标题」
+// 的条目（从未被编辑过），用户若在演示文档基础上改名/重建过内容则保留。
+(function purgeDemoDocs(): void {
+  const stale = loadDocsIndex().filter((e) => e.demo && e.title === DEMO_TITLE);
+  if (!stale.length) return;
+  for (const e of stale) {
+    localStorage.removeItem(DOC_PREFIX + e.id);
+    localStorage.removeItem(`${LS_EXPANDED}:${e.id}`);
   }
-}
+  saveDocsIndex(loadDocsIndex().filter((e) => !(e.demo && e.title === DEMO_TITLE)));
+  if (stale.some((e) => e.id === localStorage.getItem(LAST_DOC_KEY))) {
+    localStorage.removeItem(LAST_DOC_KEY);
+    currentDocId = null;
+  }
+})();
 
 // 打开上次编辑的文档；否则显示首页
 const lastId = localStorage.getItem(LAST_DOC_KEY);
