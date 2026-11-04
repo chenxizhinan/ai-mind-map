@@ -391,10 +391,13 @@ export function registerTools(
 
   server.tool(
     'open_document',
-    '按 id/title 定位并返回文档信息。为防多 Agent 串文件，后续文档内工具仍须显式传入返回的 id 作为 docId。',
+    '按 id/title 定位并返回文档信息（title 支持空格分隔的多关键词模糊匹配，顺序无关）。为防多 Agent 串文件，后续文档内工具仍须显式传入返回的 id 作为 docId。',
     {
       id: z.string().optional().describe('文档 id（list_documents 返回的）'),
-      title: z.string().optional().describe('文档标题（支持唯一模糊匹配）'),
+      title: z
+        .string()
+        .optional()
+        .describe('文档标题或简称（多关键词空格分隔，全部命中即可，如「hades 用例」）'),
     },
     async ({ id, title }) => {
       try {

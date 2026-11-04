@@ -239,3 +239,48 @@ describe('tools with {docs} context', () => {
     expect(existsSync(join(dir, `${id}.mindmap.json`))).toBe(false);
   });
 });
+
+describe('DirDocManager.openDoc 按名称解析（用户不知道文件 id）', () => {
+  it('多关键词模糊匹配（顺序无关、大小写不敏感）命中唯一文档', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'aimm-fuzzy-'));
+    dirs.push(dir);
+    const m = new DirDocManager(makeRegistry(), dir);
+    m.createDoc({ title: 'Hades Chat App 测试用例（恢复版）' });
+    m.createDoc({ title: 'BYOS 验证与测试用例' });
+    // 用户说「hades 用例」→ 中间隔着 chat app 也能命中
+    expect(m.openDoc({ title: 'hades 用例' }).title).toBe('Hades Chat App 测试用例（恢复版）');
+    // 乱序关键词
+    expect(m.openDoc({ title: '测试 Hades' }).title).toBe('Hades Chat App 测试用例（恢复版）');
+    // 整串子串简称
+    expect(m.openDoc({ title: 'BYOS' }).title).toBe('BYOS 验证与测试用例');
+  });
+
+  it('多篇命中时不猜，报错列出候选 id（含标题），可按 id 精确打开', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'aimm-fuzzy2-'));
+    dirs.push(dir);
+    const m = new DirDocManager(makeRegistry(), dir);
+    m.createDoc({ title: '订单中心 · 回归测试' });
+    m.createDoc({ title: '订单中心回归测试（副本）' });
+    let msg = '';
+    try {
+      m.openDoc({ title: '订单中心' });
+      expect.unreachable('应当抛错');
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toContain('匹配到多篇');
+    expect(msg).toContain('订单中心 · 回归测试');
+    // 从报错里取第一个候选 id，按 id 打开成功
+    const id = /([^\s；;（(]+)（/.exec(msg)?.[1] ?? '';
+    expect(id).toBeTruthy();
+    expect(m.openDoc({ id }).title).toContain('订单中心');
+  });
+
+  it('完全找不到时报错并列出所有可用文档名', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'aimm-fuzzy3-'));
+    dirs.push(dir);
+    const m = new DirDocManager(makeRegistry(), dir);
+    m.createDoc({ title: '唯一的文档' });
+    expect(() => m.openDoc({ title: '风马牛不相及' })).toThrow(/可用文档.*唯一的文档/);
+  });
+});

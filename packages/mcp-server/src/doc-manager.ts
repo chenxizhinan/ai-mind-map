@@ -192,17 +192,36 @@ export class DirDocManager implements DocContext {
     }
     if (ref.title) {
       const all = this.listDocs();
-      const exact = all.filter((d) => d.title === ref.title);
+      const q = ref.title.trim();
+      const exact = all.filter((d) => d.title === q);
       if (exact.length === 1) return this.openDoc({ id: exact[0]!.id });
       if (exact.length > 1) {
-        throw new Error(`标题「${ref.title}」匹配到多篇文档，请用 id 指定: ${exact.map((d) => d.id).join(', ')}`);
+        throw new Error(
+          `标题「${ref.title}」匹配到多篇文档，请用 id 指定: ${exact
+            .map((d) => `${d.id}（${d.nodeCount} 节点，更新于 ${d.updatedAt || '未知'}）`)
+            .join('；')}`,
+        );
       }
-      // 唯一模糊匹配（大小写不敏感包含）
-      const t = ref.title.toLowerCase();
-      const fuzzy = all.filter((d) => d.title.toLowerCase().includes(t));
-      if (fuzzy.length === 1) return this.openDoc({ id: fuzzy[0]!.id });
-      if (fuzzy.length > 1) {
-        throw new Error(`标题「${ref.title}」模糊匹配到多篇文档，请用 id 指定: ${fuzzy.map((d) => d.id).join(', ')}`);
+      // 模糊匹配：按空格/标点拆关键词，全部命中（大小写不敏感、顺序无关）才算候选。
+      // 例：「hades 用例」能命中「Hades Chat App 测试用例（恢复版）」。
+      // 多篇命中时不猜：列出候选（id + 标题）让用户/Agent 选。
+      const tokens = q
+        .toLowerCase()
+        .split(/[\s,，、;；/|·]+/)
+        .filter(Boolean);
+      if (tokens.length) {
+        const hits = all.filter((d) => {
+          const t = d.title.toLowerCase();
+          return tokens.every((tk) => t.includes(tk));
+        });
+        if (hits.length === 1) return this.openDoc({ id: hits[0]!.id });
+        if (hits.length > 1) {
+          throw new Error(
+            `「${ref.title}」模糊匹配到多篇文档，请用 id 或更具体的名称指定: ${hits
+              .map((d) => `${d.id}（${d.title}）`)
+              .join('；')}`,
+          );
+        }
       }
       throw new Error(`找不到文档「${ref.title}」。可用文档: ${all.map((d) => d.title).join('、') || '（空）'}`);
     }

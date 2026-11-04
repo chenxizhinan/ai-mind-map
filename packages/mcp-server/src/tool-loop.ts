@@ -33,6 +33,9 @@ const SYSTEM_PROMPT = [
   '工作方式：',
   '1. 会话开始先 list_documents 了解现有文档；用户要求生成新的用例集/新脑图时务必 create_document 新建文档（会出现在应用首页），严禁往现有文档里灌或覆盖；',
   '   用户要求更新某篇既有文档时，先 open_document（title 或 id）定位，并保存返回的 id。',
+  '1b. 用户只会用名称或简称指代文档（如「编辑 hades 用例」「更新 BYOS 那篇」），绝不会知道文件 id：',
+  '    不要向用户索要 id；自己先 list_documents 或 open_document 用 title 解析（支持空格分隔的多关键词模糊匹配，顺序无关、大小写不敏感）。',
+  '    多篇命中时把报错里的候选（id + 标题 + 更新时间）转述给用户让其选择，确定后始终用同一个 docId。',
   '1a. 所有读取、写入、校验目标文档内容的工具都必须显式传 docId；不要依赖 active 状态。即使期间调用其他文档，也始终使用最初确认的 docId，避免并发 Agent 串文件。',
   '2. 生成用例前先 query_tree（docId + limit 30）了解目标文档的现有结构，避免重复、对齐既有模块命名。',
   '3. 批量建用例用 add_subtree 一次提交一棵完整子树（模块 folder 下挂 case 数组）。',
@@ -110,7 +113,8 @@ const TOOL_DEFS: ToolDef[] = [
   },
   {
     name: 'open_document',
-    description: '切换激活文档（后续节点工具作用于它）。id 与 title 二选一；标题重名时报错列出候选 id，用 id 重试',
+    description:
+      '按 id 或 title 定位文档，返回其 id（后续节点工具用该 id 作为 docId）。title 支持精确匹配或空格分隔的多关键词模糊匹配（大小写不敏感、顺序无关，如「hades 用例」可命中「Hades Chat App 测试用例」）；多篇命中时报错并列出候选，需换更具体的名称或用 id 重试',
     schema: {
       type: 'object',
       properties: { id: { type: 'string' }, title: { type: 'string' } },
