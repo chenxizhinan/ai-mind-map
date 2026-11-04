@@ -2073,6 +2073,7 @@ function fitView(): void {
 
 // ---------- 文档装载 ----------
 function loadDoc(d: MindDocument, keepViewport = false): void {
+  docLoaded = true;
   store = DocStore.fromJSON(registry, d);
   // doc 引用 store 内部对象：之后所有编辑都反映在 doc 上，persistCurrent/saveLocal 才不会写旧快照
   doc = store.toJSON();
@@ -2250,7 +2251,12 @@ async function syncDocsFromBridge(): Promise<void> {
 }
 
 /** 探测 bridge 是否多文档模式（GET /docs 200 = 是）。多文档时同步一次列表 */
+let lastBridgeDetectAt = 0;
+
 async function detectBridgeMode(): Promise<boolean> {
+  const now = Date.now();
+  if (now - lastBridgeDetectAt < 5000) return bridgeMultiDoc; // 去抖：5s 内的重复探测直接用缓存
+  lastBridgeDetectAt = now;
   try {
     const res = await fetch(`${BRIDGE_URL}/docs`);
     if (!res.ok) return false;
@@ -2269,24 +2275,46 @@ function connectBridge(): void {
       void detectBridgeMode();
     });
     es.addEventListener('changed', (ev) => {
-      // changed 的 data 携带 {docId,title,updatedAt}（旧 bridge 为 {}）
+      // changed 携带 {docId,title,updatedAt}（旧 bridge 为 {}）
       let docId: string | undefined;
+      let title = '';
+      let changedAt = '';
       try {
-        docId = (JSON.parse((ev as MessageEvent).data) as { docId?: string }).docId;
+        const p = JSON.parse((ev as MessageEvent).data) as { docId?: string; title?: string; updatedAt?: string };
+        docId = p.docId;
+        title = p.title ?? '';
+        changedAt = p.updatedAt ?? '';
       } catch {
         /* 旧负载 */
       }
       if (docId !== undefined && docId !== '' && loadDocsIndex().some((e) => e.remoteId)) {
-        // 多文档模式：先同步列表（新文档出现/卡片更新），
-        // 只在变更文档是当前打开的那篇时才拉内容
-        void syncDocsFromBridge().then(() => {
+        // 按文件定点处理：变更事件自带 docId，只有当前打开的那篇才拉内容；
+        // 全局列表仅在出现未知 docId（别处新建了文档）时才去重同步一次，
+        // 不再为每次变更都拉一遍 /docs
+        const entry = loadDocsIndex().find((e) => e.remoteId === docId);
+        if (entry) {
+          let touched = false;
+          if (title && entry.title !== title) {
+            entry.title = title;
+            touched = true;
+          }
+          if (changedAt) {
+            const t = Date.parse(changedAt);
+            if (Number.isFinite(t)) {
+              entry.updatedAt = t;
+              touched = true;
+            }
+          }
+          if (touched) saveDocsIndex(loadDocsIndex().map((e) => (e.id === entry.id ? entry : e)));
           const cur = currentEntry();
-          if (cur?.remoteId && cur.remoteId === docId) void pullRemote(docId);
-        });
-      } else {
-        // 遗留单文档 bridge 或尚未吸收过文档：保持旧行为
-        void pullRemote();
+          if (cur?.remoteId && cur.remoteId === docId) schedulePullRemote(docId);
+          return;
+        }
+        scheduleDocsListSync(); // 未知 docId：可能别处新建了文档，去重后同步一次列表
+        return;
       }
+      // 遗留单文档 bridge 或尚未吸收过文档：保持旧行为
+      void pullRemote();
     });
     es.onerror = () => {
       /* 断线自动重连由 EventSource 内建 */
@@ -2299,6 +2327,32 @@ function connectBridge(): void {
 
 /** 同一文档并发“首次挂载”时复用同一个请求，避免各建一份 bridge 文档 */
 const remoteMounts = new Map<string, Promise<string | null>>();
+
+/** 变更事件的按文档去重拉取：Agent 连续 add_subtree 时合并在 400ms 窗口内的多次广播 */
+const pendingPulls = new Map<string, ReturnType<typeof setTimeout>>();
+
+function schedulePullRemote(docId: string): void {
+  if (pendingPulls.has(docId)) return; // 已有待执行的拉取
+  pendingPulls.set(
+    docId,
+    setTimeout(() => {
+      pendingPulls.delete(docId);
+      const cur = currentEntry();
+      if (cur?.remoteId === docId) void pullRemote(docId);
+    }, 400),
+  );
+}
+
+/** 全局文档列表同步去重：短时间内多次触发只拉一次 */
+let docsListSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleDocsListSync(): void {
+  if (docsListSyncTimer) return;
+  docsListSyncTimer = setTimeout(() => {
+    docsListSyncTimer = null;
+    void syncDocsFromBridge();
+  }, 1500);
+}
 
 /**
  * 浏览器侧保存：确保指定文档已在 bridge 注册并返回 remoteId。
@@ -2414,6 +2468,7 @@ async function pushRemote(): Promise<void> {
   const title = store.document.meta.title || '未命名导图';
   try {
     const rid = await ensureRemoteDoc(senderId, title);
+    updateDocUrl(); // 首次挂载后 URL 升级为全局文档 id
     if (rid) {
       // 刚从远端拉取的内容不回推：内容源自 bridge，回推会形成 PUT↔GET 回声循环
       if (Date.now() - (lastPullAtByRemote.get(rid) ?? 0) < 1200) {
@@ -2498,6 +2553,7 @@ async function deleteDoc(id: string): Promise<void> {
   if (currentDocId === id) {
     currentDocId = null;
     localStorage.removeItem(LAST_DOC_KEY);
+    setDocUrl('', 'replace');
   }
   const rid = entry?.remoteId;
   if (rid) {
@@ -2546,6 +2602,7 @@ async function fillRemoteInto(id: string, remoteId: string, allowRetry = true): 
     lastPullAtByRemote.set(remoteId, Date.now()); // 内容源自 bridge：抑制紧接着的回推
     loadDoc(remote, false);
     syncDocTitle();
+    updateDocUrl(); // 挂载后拿到 remoteId：URL 升级为全局文档 id
   } catch {
     /* bridge 未启动 / 文档已删除：保持空白占位；稍后自动重试一次 */
     if (allowRetry) {
@@ -2554,6 +2611,93 @@ async function fillRemoteInto(id: string, remoteId: string, allowRetry = true): 
       }, 3000);
     }
   }
+}
+
+// ---------- 文档路由（/d/<bridge 文档 id 或本地 id>，列表为 /） ----------
+// 列表页刷新留在列表；编辑页刷新重开原文档；URL 可分享，同事打开即同一篇。
+// 优先用 bridge 侧 remoteId（跨浏览器稳定），未挂载的本地草稿退回本地 id。
+let lastDocUrlKey: string | null = null;
+let docLoaded = false;
+
+function setDocUrl(key: string, mode: 'push' | 'replace'): void {
+  try {
+    const url = key ? `/d/${encodeURIComponent(key)}` : '/';
+    if (mode === 'push') window.history.pushState(null, '', url);
+    else window.history.replaceState(null, '', url);
+    lastDocUrlKey = key;
+  } catch {
+    /* 隐私模式等受限场景：忽略，不影响功能 */
+  }
+}
+
+function updateDocUrl(): void {
+  try {
+    const home = document.getElementById('home-view');
+    if (home && home.style.display !== 'none') return; // 首页 URL 固定为 /
+    const entry = currentDocId ? loadDocsIndex().find((x) => x.id === currentDocId) : null;
+    const key = entry?.remoteId || currentDocId || '';
+    if (lastDocUrlKey === key) return;
+    setDocUrl(key, 'replace');
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 从 URL 解析文档 key：/d/<id> 或兼容旧链接 ?doc=<id> */
+function docKeyFromLocation(): string {
+  const m = /^\/d\/([^/]+)\/?$/.exec(location.pathname);
+  if (m) return decodeURIComponent(m[1]!);
+  return new URLSearchParams(location.search).get('doc') ?? '';
+}
+
+/**
+ * 按 URL 打开对应视图（启动与 popstate 共用）。
+ * - 无 key：显示首页列表（列表刷新留在列表；内存中的文档保留，后退可回）
+ * - 有 key：本地条目直接打开；本机没有则从 bridge 拉取建条目（分享链接场景）
+ */
+function applyRouteFromLocation(): void {
+  const key = docKeyFromLocation();
+  if (!key) {
+    if (!docLoaded) loadDoc(blankDoc('未命名导图'), false);
+    showHome(true);
+    return;
+  }
+  const local = loadDocsIndex().find((e) => e.remoteId === key || e.id === key);
+  if (local) {
+    if (local.id === currentDocId && docLoaded) {
+      lastDocUrlKey = key; // 已是该文档：仅对齐 URL，不重复装载
+      return;
+    }
+    openDoc(local.id);
+    showHome(false);
+    return;
+  }
+  loadDoc(blankDoc(key), false); // 拉取期间 renderer 的占位内容
+  void (async () => {
+    try {
+      const res = await fetch(`${BRIDGE_URL}/doc/${encodeURIComponent(key)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const d = (await res.json()) as MindDocument;
+      const id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      localStorage.setItem(DOC_PREFIX + id, JSON.stringify(d));
+      const entries = loadDocsIndex();
+      entries.unshift({ id, title: d.meta.title || '未命名导图', updatedAt: Date.now(), remoteId: key });
+      saveDocsIndex(entries);
+      remoteVersionByRemote.set(key, d.meta.updatedAt ?? '');
+      openDoc(id);
+      showHome(false);
+    } catch {
+      toast('链接指向的文档不存在，或 bridge 暂不可达', 'warn');
+      loadDoc(blankDoc('未命名导图'), false);
+      showHome(true);
+    }
+  })();
+}
+
+/** 用户主动打开文档：写入一条历史记录（后退可回列表/上一篇） */
+function pushDocNav(id: string): void {
+  const e = loadDocsIndex().find((x) => x.id === id);
+  setDocUrl(e?.remoteId || id, 'push');
 }
 
 /** 打开一个文档（从其槽位加载，失效则新建；remoteOnly 条目先从 bridge 拉内容） */
@@ -2570,6 +2714,7 @@ function openDoc(id: string): void {
   }
   currentDocId = id;
   localStorage.setItem(LAST_DOC_KEY, id);
+  updateDocUrl();
   // 清空撤销栈：history 是全局的，跨文档恢复会把上一篇快照灌进当前文档
   history = [];
   future = [];
@@ -2604,6 +2749,7 @@ function createDoc(title?: string, templateId = 'blank'): string {
   entries.unshift({ id, title: d.meta.title, updatedAt: Date.now() });
   saveDocsIndex(entries);
   localStorage.setItem(LAST_DOC_KEY, id);
+  setDocUrl(id, 'push');
   showHome(false); // 先关首页再装载，进入编辑器
   openDoc(id);
   return id;
@@ -2749,12 +2895,14 @@ function renderHome(): void {
   grid.querySelectorAll('.doc-row').forEach((el) =>
     el.addEventListener('click', (ev) => {
       if ((ev.target as HTMLElement).closest('button')) return; // 按钮各自处理
+      pushDocNav((el as HTMLElement).dataset.id!);
       showHome(false);
       openDoc((el as HTMLElement).dataset.id!);
     }),
   );
   grid.querySelectorAll('[data-open]').forEach((el) =>
     el.addEventListener('click', () => {
+      pushDocNav((el as HTMLElement).dataset.open!);
       showHome(false);
       openDoc((el as HTMLElement).dataset.open!);
     }),
@@ -2800,6 +2948,12 @@ function showHome(show: boolean): void {
   closeStatsPopover();
   persistCurrent();
   renderHome();
+  // 首页 URL 固定为 /：列表刷新留在列表
+  try {
+    if (lastDocUrlKey !== '') setDocUrl('', 'replace');
+  } catch {
+    /* ignore */
+  }
 }
 
 // 视图切换
@@ -3081,6 +3235,7 @@ document.getElementById('home-import')?.addEventListener('click', () => {
         entries.unshift({ id, title: d.meta.title, updatedAt: Date.now() });
         saveDocsIndex(entries);
         localStorage.setItem(LAST_DOC_KEY, id);
+        setDocUrl(id, 'push');
         showHome(false);
         openDoc(id);
         toast('已导入为新文档', 'success');
@@ -3094,6 +3249,7 @@ document.getElementById('home-import')?.addEventListener('click', () => {
 
 // 顶部 logo 点击返回首页
 document.getElementById('home-btn')?.addEventListener('click', () => {
+  setDocUrl('', 'push');
   showHome(true);
 });
 
@@ -3154,16 +3310,9 @@ document.getElementById('home-btn')?.addEventListener('click', () => {
   }
 })();
 
-// 打开上次编辑的文档；否则显示首页
-const lastId = localStorage.getItem(LAST_DOC_KEY);
-if (lastId && localStorage.getItem(DOC_PREFIX + lastId)) {
-  openDoc(lastId);
-  showHome(false);
-} else {
-  // 先装载一个空文档占位（renderer 需要），再弹首页
-  loadDoc(blankDoc('未命名导图'), false);
-  showHome(true);
-}
+// 启动与前进/后退共用一套路由：/ → 首页列表；/d/<id> → 打开该文档
+window.addEventListener('popstate', () => applyRouteFromLocation());
+applyRouteFromLocation();
 updateZoomPct();
 
 // 主题
