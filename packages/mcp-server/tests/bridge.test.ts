@@ -290,17 +290,25 @@ describe('bridge dir mode (multi-doc)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: '新文档' }),
       })
-    ).json()) as { id: string; title: string; rootId: string };
+    ).json()) as { id: string; title: string; rootId: string; updatedAt: string };
     expect(created.rootId).toBe('n_0001');
+    expect(created.updatedAt).toBeTruthy();
     expect(existsSync(join(ctx.docsDir, `${created.id}.mindmap.json`))).toBe(true);
 
-    // PUT 按.id 落对应文件
-    const s = ctx.docs.byId(created.id)!;
-    s.addSubtree(s.root.id, { type: 'folder', text: '模块X' });
+    // PUT 按.id 落对应文件（dir 模式强制 If-Match，版本来自 POST 响应；body 为独立内容，
+    // 不直接改服务端内存 store——节点变更会自动刷新 updatedAt，旧版本号本就该被拒）
     const put = await fetch(`http://localhost:${port}/doc/${encodeURIComponent(created.id)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(s.toJSON()),
+      headers: { 'Content-Type': 'application/json', 'If-Match': created.updatedAt },
+      body: JSON.stringify({
+        version: 1,
+        meta: { title: '新文档', updatedAt: created.updatedAt },
+        tree: {
+          id: 'n_0001', type: 'folder', text: '新文档', props: {},
+          children: [{ id: 'n_0002', type: 'folder', text: '模块X', props: {}, children: [] }],
+        },
+        annotations: [],
+      }),
     });
     expect(put.ok).toBe(true);
     const back = (await (await fetch(`http://localhost:${port}/doc/${encodeURIComponent(created.id)}`)).json()) as {
@@ -331,7 +339,7 @@ describe('bridge dir mode (multi-doc)', () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title: '应用文档', id }),
         })
-      ).json()) as { id: string; title: string; rootId: string };
+      ).json()) as { id: string; title: string; rootId: string; updatedAt: string };
 
     const first = await create('web-stable-id');
     expect(first.id).toBe('web-stable-id');
@@ -344,7 +352,7 @@ describe('bridge dir mode (multi-doc)', () => {
     // PUT 写内容后 DELETE 删除
     await fetch(`http://localhost:${port}/doc/web-stable-id`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'If-Match': first.updatedAt },
       body: JSON.stringify(minimalDoc('应用文档')),
     });
     const del = await fetch(`http://localhost:${port}/doc/web-stable-id`, { method: 'DELETE' });
@@ -365,14 +373,14 @@ describe('bridge dir mode (multi-doc)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: '事件文档' }),
       })
-    ).json()) as { id: string };
+    ).json()) as { id: string; updatedAt: string };
 
     const dataPromise = nextChangedData(port);
     await new Promise((r) => setTimeout(r, 100));
     const s = ctx.docs.byId(created.id)!;
     await fetch(`http://localhost:${port}/doc/${encodeURIComponent(created.id)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'If-Match': created.updatedAt },
       body: JSON.stringify(s.toJSON()),
     });
     const data = await dataPromise;
@@ -416,12 +424,24 @@ describe('bridge dir mode (multi-doc)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: '锁测试' }),
       })
-    ).json()) as { id: string };
+    ).json()) as { id: string; updatedAt: string };
 
-    // 首次 PUT（无 If-Match）成功，响应返回落盘后的版本号
-    const put1 = await fetch(`http://localhost:${port}/doc/${encodeURIComponent(created.id)}`, {
+    // dir 模式强制 If-Match：不带版本号的 PUT 一律 409（旧页面/旧脚本无法覆盖他人修改）
+    const noVersion = await fetch(`http://localhost:${port}/doc/${encodeURIComponent(created.id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(minimalDoc('无版本写入')),
+    });
+    expect(noVersion.status).toBe(409);
+    const nv = (await noVersion.json()) as { currentUpdatedAt?: string };
+    expect(nv.currentUpdatedAt).toBe(created.updatedAt);
+    // 无版本写入未生效
+    expect(ctx.docs.byId(created.id)!.document.meta.title).toBe('锁测试');
+
+    // 带 POST 返回的正确版本 → 200，响应返回落盘后的新版本号
+    const put1 = await fetch(`http://localhost:${port}/doc/${encodeURIComponent(created.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'If-Match': created.updatedAt },
       body: JSON.stringify(minimalDoc('锁测试')),
     });
     expect(put1.ok).toBe(true);

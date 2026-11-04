@@ -302,7 +302,8 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
         }
         await enqueue(async () => {
           const r = opts.docs.createDoc({ title, id });
-          json(res, 200, r);
+          const created = opts.docs.byId(r.id);
+          json(res, 200, { ...r, updatedAt: created?.document.meta.updatedAt ?? '' });
         });
         return;
       }
@@ -373,8 +374,8 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
         // PUT /doc/:id
         const raw = await readBody(req);
         // If-Match 乐观锁：携带客户端最后看到的 meta.updatedAt（save() 每次落盘都会刷新）。
-        // 不匹配 = 文档已被其他浏览器/Agent 写过 → 409，客户端拉取最新并备份自己的修改，
-        // 而不是静默整树覆盖。
+        // dir 模式强制要求 If-Match：不带版本号的写入一律 409——
+        // 未强刷的旧页面（无版本跟踪）由此被整体挡在门外，无法覆盖任何人的修改。
         const ifMatch = req.headers['if-match'];
         await enqueue(async () => {
           const current = isDir ? docs.byId(rawId) : docs.store();
@@ -384,12 +385,17 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
             json(res, 404, { error: `document not found: ${rawId}` });
             return;
           }
-          if (typeof ifMatch === 'string' && ifMatch.length && current) {
-            const curVersion = current.document.meta.updatedAt;
-            if (curVersion && curVersion !== ifMatch) {
-              json(res, 409, { error: '文档已被其他客户端修改', currentUpdatedAt: curVersion });
-              return;
-            }
+          const curVersion = current?.document.meta.updatedAt ?? '';
+          if (isDir && (typeof ifMatch !== 'string' || !ifMatch.length)) {
+            json(res, 409, {
+              error: '缺少 If-Match 版本号：请先 GET /doc/:id 获取最新内容与版本（旧页面请强制刷新后再编辑）',
+              currentUpdatedAt: curVersion,
+            });
+            return;
+          }
+          if (typeof ifMatch === 'string' && ifMatch.length && current && curVersion && curVersion !== ifMatch) {
+            json(res, 409, { error: '文档已被其他客户端修改', currentUpdatedAt: curVersion });
+            return;
           }
           const d = JSON.parse(raw);
           docs.putDoc(rawId, d);

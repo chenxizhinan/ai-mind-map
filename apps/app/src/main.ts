@@ -2327,7 +2327,8 @@ async function ensureRemoteDoc(docId: string, title: string): Promise<string | n
         rollbackRemoteId(docId, stableId);
         return null;
       }
-      const r = (await res.json()) as { id: string };
+      const r = (await res.json()) as { id: string; updatedAt?: string };
+      if (r.updatedAt) remoteVersionByRemote.set(r.id, r.updatedAt); // 记录新建文档的版本（首次 PUT 的 If-Match）
       if (r.id !== stableId) {
         // 旧版 bridge 不认识指定 id，回填它实际分配的 id
         const cur = loadDocsIndex().find((e) => e.id === docId);
@@ -3116,17 +3117,38 @@ document.getElementById('home-btn')?.addEventListener('click', () => {
 })();
 
 // 旧版首次使用会预置演示文档（demo 标记）。演示文档已按需求彻底移除；
-// 这里清理旧浏览器 localStorage 里残留的演示副本：只清「demo 标记 + 仍是演示原标题」
-// 的条目（从未被编辑过），用户若在演示文档基础上改名/重建过内容则保留。
+// 这里清理浏览器 localStorage 里残留的演示内容，两类都清：
+// ① demo 标记且仍是演示原标题的条目；② 内容指纹命中演示数据的条目（历史污染镜像、
+//    冲突备份等——标题含「订单中心 · 回归测试」且 root 文本为「根节点」且节点数 ≥ 12000）。
+// 用户若在演示基础上改名/重建过真实内容则不会被指纹命中，予以保留。
 (function purgeDemoDocs(): void {
-  const stale = loadDocsIndex().filter((e) => e.demo && e.title === DEMO_TITLE);
-  if (!stale.length) return;
-  for (const e of stale) {
-    localStorage.removeItem(DOC_PREFIX + e.id);
-    localStorage.removeItem(`${LS_EXPANDED}:${e.id}`);
+  const count = (n: { children?: unknown[] }): number =>
+    1 + (n.children ?? []).reduce((acc: number, c) => acc + count(c as { children?: unknown[] }), 0);
+  const staleIds: string[] = [];
+  for (const e of loadDocsIndex()) {
+    if (e.demo && e.title === DEMO_TITLE) {
+      staleIds.push(e.id);
+      continue;
+    }
+    const raw = localStorage.getItem(DOC_PREFIX + e.id);
+    if (!raw) continue;
+    try {
+      const d = JSON.parse(raw) as MindDocument;
+      if (!(d.meta?.title ?? '').includes(DEMO_TITLE)) continue;
+      if (d.tree?.text !== '根节点') continue;
+      if (count(d.tree) < 12000) continue;
+      staleIds.push(e.id);
+    } catch {
+      /* 槽位解析失败不动，避免误删 */
+    }
   }
-  saveDocsIndex(loadDocsIndex().filter((e) => !(e.demo && e.title === DEMO_TITLE)));
-  if (stale.some((e) => e.id === localStorage.getItem(LAST_DOC_KEY))) {
+  if (!staleIds.length) return;
+  for (const id of staleIds) {
+    localStorage.removeItem(DOC_PREFIX + id);
+    localStorage.removeItem(`${LS_EXPANDED}:${id}`);
+  }
+  saveDocsIndex(loadDocsIndex().filter((e) => !staleIds.includes(e.id)));
+  if (staleIds.includes(localStorage.getItem(LAST_DOC_KEY) ?? '')) {
     localStorage.removeItem(LAST_DOC_KEY);
     currentDocId = null;
   }
