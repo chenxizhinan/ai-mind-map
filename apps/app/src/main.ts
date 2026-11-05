@@ -3562,7 +3562,7 @@ async function openConnectDialog(): Promise<void> {
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
           <b style="font-size:13.5px;color:#1e293b">② Skill（团队复用）</b>
           <span style="display:flex;gap:6px">
-            <button class="btn conn-copy" data-copy="skill" style="padding:4px 12px;font-size:12px">复制 Skill</button>
+            <button class="btn" data-skill-preview title="查看最新版 SKILL.md 内容" style="padding:4px 12px;font-size:12px;background:#fff;border:1px solid #cbd5e1;color:#475569;cursor:pointer">👁 预览 SKILL.md</button>
             <button class="btn conn-dl" data-dl="skillpkg" title="含 SKILL.md、references/、scripts/ 的完整技能包" style="padding:4px 12px;font-size:12px;background:#eff6ff;border:1px solid #bfdbfe;color:#2563eb">⬇ 下载技能包 (.zip)</button>
           </span>
         </div>
@@ -3610,9 +3610,24 @@ async function openConnectDialog(): Promise<void> {
     mcpHttp: '复制远程配置',
     mcpUrl: '复制 URL',
     mcp: '复制本地配置',
-    skill: '复制 Skill',
     chat: '复制提示词',
   };
+  overlay.querySelector('[data-skill-preview]')?.addEventListener('click', () => {
+    void (async () => {
+      let content = skillText;
+      try {
+        const res = await fetch(`${BRIDGE_URL}/skill/raw`);
+        if (res.ok) content = await res.text(); // bridge 在线：拉取最新版
+      } catch {
+        /* bridge 不可达：回退构建内置副本 */
+      }
+      if (!content) {
+        toast('SKILL.md 内容为空：bridge 不可达', 'warn');
+        return;
+      }
+      openSkillPreview(info?.skillVersion ?? '?', content);
+    })();
+  });
   overlay.querySelectorAll('.conn-copy').forEach((btn) =>
     btn.addEventListener('click', async () => {
       const key = (btn as HTMLElement).dataset.copy!;
