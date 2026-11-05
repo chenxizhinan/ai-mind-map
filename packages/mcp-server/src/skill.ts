@@ -26,8 +26,9 @@ function skillDirs(): string[] {
   const here = dirname(fileURLToPath(import.meta.url));
   const dirs = [
     process.env.SKILL_DIR,
-    resolve(here, '../../../.agents/skills/test-case-designer'), // 仓库内（tsx 开发）
-    resolve(here, '../skill'), // Docker：/app/skill
+    resolve(here, '../../../.agents/skills/test-case-designer'), // 仓库内源码（packages/mcp-server/src）
+    resolve(here, '../../.agents/skills/test-case-designer'), // 仓库内 dist-server（本地 make bridge）
+    resolve(here, 'skill'), // Docker：/app/skill（bridge.mjs 同级）
   ];
   return dirs.filter((d): d is string => !!d);
 }
