@@ -8,6 +8,58 @@
       /* 首屏路由预判（见 head 内联脚本）：/ 直接显示列表；/d/<id> 只显示画布，杜绝刷新闪切 */
       #home-view { display: none; }
       html.route-home #home-view { display: block; }
+
+      /* ---------- 首页列表 UI ---------- */
+      .home-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
+      .home-title { font-size: 26px; font-weight: 800; color: #0f172a; letter-spacing: .3px; }
+      .home-stats { color: #94a3b8; font-size: 12.5px; margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+      .stat-chip { display: inline-flex; align-items: center; gap: 5px; background: #fff; border: 1px solid #e6ecf3; border-radius: 999px; padding: 3px 11px; color: #475569; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+      .stat-chip b { color: #0f172a; font-weight: 700; }
+      .home-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .hbtn { display: inline-flex; align-items: center; gap: 6px; background: #fff; border: 1px solid #dbe3ec; color: #475569; padding: 8px 13px; border-radius: 10px; font-size: 12.5px; cursor: pointer; transition: all .15s ease; box-shadow: 0 1px 2px rgba(15,23,42,.04); white-space: nowrap; }
+      .hbtn:hover { border-color: #93c5fd; color: #2563eb; background: #f8fbff; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(37,99,235,.12); }
+      .hbtn.active { background: #eff6ff; border-color: #bfdbfe; color: #2563eb; }
+      .hbtn.primary { background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #fff; font-weight: 600; border: none; box-shadow: 0 4px 16px rgba(37,99,235,.3); }
+      .hbtn.primary:hover { box-shadow: 0 6px 22px rgba(37,99,235,.4); }
+      .vline { width: 1px; height: 22px; background: #e2e8f0; margin: 0 2px; }
+      .seg { display: flex; background: #fff; border: 1px solid #dbe3ec; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+      .seg button { border: none; background: #fff; color: #94a3b8; padding: 8px 12px; cursor: pointer; display: flex; align-items: center; transition: all .12s ease; }
+      .seg button.on { background: #eff6ff; color: #2563eb; }
+      .seg button + button { border-left: 1px solid #eef2f7; }
+      .group-card { background: #fff; border: 1px solid #e8edf3; border-radius: 14px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(15,23,42,.05); }
+      .group-head { display: flex; align-items: center; gap: 9px; padding: 12px 16px; border-bottom: 1px solid #f1f5f9; background: linear-gradient(180deg, #fbfdff, #fff); border-radius: 13px 13px 0 0; }
+      .group-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 0 3px rgba(37,99,235,.08); }
+      .gname { font-size: 13px; font-weight: 700; color: #334155; }
+      .gcount { font-size: 11px; color: #94a3b8; background: #f1f5f9; border-radius: 999px; padding: 1px 8px; }
+      .ghint { font-size: 11px; color: #cbd5e1; }
+      .group-items { padding: 4px 10px 10px; }
+      .group-items.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; padding: 14px; }
+      .doc-row { display: flex; align-items: center; gap: 13px; padding: 12px 12px; background: #fff; border-radius: 10px; cursor: pointer; transition: background .14s ease, box-shadow .14s ease; position: relative; }
+      .doc-row::before { content: ''; position: absolute; left: 2px; top: 10px; bottom: 10px; width: 3px; border-radius: 2px; background: transparent; transition: background .14s ease; }
+      .doc-row:hover { background: #f8fbff; box-shadow: 0 2px 10px rgba(37,99,235,.08); }
+      .doc-row:hover::before { background: #2563eb; }
+      .doc-row.selected { background: #f0f7ff; }
+      .doc-row.selected::before { background: #93c5fd; }
+      .doc-avatar { width: 38px; height: 38px; border-radius: 11px; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 16px; flex-shrink: 0; box-shadow: 0 2px 6px rgba(15,23,42,.14); }
+      .doc-title { font-size: 14px; font-weight: 600; color: #1e293b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .doc-sub { font-size: 11.5px; color: #94a3b8; margin-top: 2px; }
+      .row-meta { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+      .row-count { font-size: 12.5px; color: #64748b; width: 84px; text-align: right; }
+      .row-count b { color: #334155; font-weight: 600; }
+      .row-time { font-size: 12px; color: #94a3b8; width: 78px; text-align: right; }
+      .row-actions { display: flex; gap: 6px; align-items: center; opacity: 0; transition: opacity .14s ease; }
+      .doc-row:hover .row-actions { opacity: 1; }
+      .open-btn { border: none; background: #2563eb; color: #fff; padding: 5px 13px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; }
+      .icon-btn { border: 1px solid #e2e8f0; background: #fff; color: #64748b; width: 28px; height: 28px; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; transition: all .12s ease; }
+      .icon-btn:hover { border-color: #93c5fd; color: #2563eb; background: #f8fbff; }
+      .icon-btn.danger:hover { border-color: #fca5a5; color: #dc2626; background: #fef2f2; }
+      .doc-check { width: 15px; height: 15px; accent-color: #2563eb; cursor: pointer; flex-shrink: 0; }
+      .drop-hover { outline: 2px dashed #93c5fd; outline-offset: 2px; background: #f0f7ff !important; }
+      .batch-bar { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 1200; background: rgba(15,23,42,.92); backdrop-filter: blur(8px); color: #fff; border-radius: 14px; padding: 10px 16px; display: none; align-items: center; gap: 10px; box-shadow: 0 16px 44px rgba(15,23,42,.4); }
+      .batch-bar button { border: none; border-radius: 9px; padding: 7px 13px; font-size: 12.5px; cursor: pointer; }
+      .batch-bar select { border: none; border-radius: 8px; padding: 7px 10px; font-size: 12.5px; background: #334155; color: #fff; outline: none; }
+      .home-empty { text-align: center; padding: 84px 0 60px; border: 1px dashed #cbd5e1; border-radius: 18px; background: linear-gradient(180deg, #fbfdff, #f8fafc); }
+      @media (max-width: 720px) { .row-count, .row-time { display: none; } }
       * { box-sizing: border-box; margin: 0; padding: 0; }
       html, body, #app { height: 100%; overflow: hidden; }
       body {
@@ -379,37 +431,35 @@
           </div>
         </div>
 
-        <!-- 文件区：标题行 + 列表 -->
-        <div style="position:relative;max-width:980px;margin:0 auto;padding:40px 36px 72px">
-          <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:22px">
+        <!-- 文件区：标题行 + 工具栏 + 列表 -->
+        <div style="max-width:1020px;margin:0 auto;padding:34px 36px 80px">
+          <div class="home-head">
             <div>
-              <div style="font-size:24px;font-weight:700;color:#1e293b;letter-spacing:0.3px">我的导图</div>
-              <div id="home-stats" style="color:#94a3b8;font-size:12.5px;margin-top:6px"></div>
+              <div class="home-title">我的导图</div>
+              <div id="home-stats" class="home-stats"></div>
             </div>
-            <div style="display:flex;align-items:center;gap:10px">
-              <div id="view-mode-switch" style="display:flex;border:1px solid #cbd5e1;border-radius:9px;overflow:hidden;background:#fff">
-                <button id="vm-list" title="列表视图" style="border:none;background:#eff6ff;color:#2563eb;padding:7px 12px;cursor:pointer;display:flex;align-items:center">
-                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 3.5h12M2 8h12M2 12.5h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-                </button>
-                <button id="vm-card" title="卡片视图" style="border:none;border-left:1px solid #e2e8f0;background:#fff;color:#94a3b8;padding:7px 12px;cursor:pointer;display:flex;align-items:center">
-                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="2" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.4"/><rect x="2" y="9" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="9" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.4"/></svg>
-                </button>
+            <div class="home-actions">
+              <div class="seg" id="view-mode-switch">
+                <button id="vm-list" title="列表视图"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 3.5h12M2 8h12M2 12.5h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+                <button id="vm-card" title="卡片视图"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="2" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.4"/><rect x="2" y="9" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="9" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.4"/></svg></button>
               </div>
-              <button class="btn" id="home-group" title="新建分组（全团队共享，可用拖拽/批量管理把文档归类）" style="background:#fff;border:1px solid #cbd5e1;color:#475569;padding:8px 14px;border-radius:9px">🗂 分组</button>
-              <button class="btn" id="home-trash" title="已删除的文档（30 天内可恢复）" style="background:#fff;border:1px solid #cbd5e1;color:#475569;padding:8px 14px;border-radius:9px">🗑 回收站</button>
-              <button class="btn" id="home-batch" title="批量选择文档：移动到分组 / 删除" style="background:#fff;border:1px solid #cbd5e1;color:#475569;padding:8px 14px;border-radius:9px">☑ 批量管理</button>
-              <button class="btn" id="home-connect" title="Agent 连接方式：MCP 配置 / Skill / 提示词" style="background:#fff;border:1px solid #cbd5e1;color:#7c3aed;padding:8px 16px;border-radius:9px">🔌 连接 Agent</button>
-              <button class="btn" id="home-import" style="background:#fff;border:1px solid #cbd5e1;color:#475569;padding:8px 16px;border-radius:9px">导入文件…</button>
-              <button class="btn primary" id="home-new" style="padding:8px 18px;border-radius:9px;box-shadow:0 4px 16px rgba(37,99,235,0.25)">＋ 新建导图</button>
+              <span class="vline"></span>
+              <button class="hbtn" id="home-trash" title="已删除的文档（30 天内可恢复）">🗑 回收站</button>
+              <button class="hbtn" id="home-batch" title="批量选择文档：移动到分组 / 删除">☑ 批量管理</button>
+              <button class="hbtn" id="home-group" title="新建分组（全团队共享，可拖拽归类）">🗂 分组</button>
+              <span class="vline"></span>
+              <button class="hbtn" id="home-connect" title="Agent 连接方式：MCP 配置 / Skill / 提示词">🔌 <span>Agent</span></button>
+              <button class="hbtn" id="home-import" title="导入 XMind / Markdown / JSON">导入…</button>
+              <button class="hbtn primary" id="home-new">＋ 新建导图</button>
             </div>
           </div>
-          <!-- 列表表头 -->
-          <div id="home-list-head" style="display:flex;align-items:center;gap:14px;padding:8px 18px;font-size:11.5px;font-weight:600;color:#94a3b8;letter-spacing:0.4px;border-bottom:1px solid #e8edf3">
+          <div id="home-list-head" style="display:none;align-items:center;gap:13px;padding:6px 24px 10px;font-size:11.5px;font-weight:600;color:#94a3b8;letter-spacing:.4px">
             <span style="flex:1">文件名</span>
-            <span style="width:110px">节点数</span>
-            <span style="width:150px">修改时间</span>
-            <span style="width:158px"></span>
+            <span style="width:84px;text-align:right">节点数</span>
+            <span style="width:78px;text-align:right">修改时间</span>
+            <span style="width:150px"></span>
           </div>
+
           <div id="home-grid"></div>
         </div>
       </div>

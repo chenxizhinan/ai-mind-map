@@ -3127,32 +3127,14 @@ function setHomeViewMode(mode: HomeViewMode): void {
 
 /** 视图模式对应的容器形态与表头显隐、切换按钮高亮 */
 function applyHomeViewChrome(): void {
-  const grid = document.getElementById('home-grid') as HTMLDivElement;
   const listHead = document.getElementById('home-list-head');
   const btnList = document.getElementById('vm-list');
   const btnCard = document.getElementById('vm-card');
-  if (!grid || !btnList || !btnCard) return;
-  if (homeViewMode === 'list') {
-    grid.style.display = 'flex';
-    grid.style.flexDirection = 'column';
-    grid.style.gridTemplateColumns = '';
-    grid.style.gap = '0';
-    if (listHead) listHead.style.display = 'flex';
-    btnList.style.background = '#eff6ff';
-    btnList.style.color = '#2563eb';
-    btnCard.style.background = '#fff';
-    btnCard.style.color = '#94a3b8';
-  } else {
-    grid.style.display = 'grid';
-    grid.style.flexDirection = '';
-    grid.style.gridTemplateColumns = 'repeat(auto-fill,minmax(280px,1fr))';
-    grid.style.gap = '18px';
-    if (listHead) listHead.style.display = 'none';
-    btnCard.style.background = '#eff6ff';
-    btnCard.style.color = '#2563eb';
-    btnList.style.background = '#fff';
-    btnList.style.color = '#94a3b8';
-  }
+  if (!btnList || !btnCard) return;
+  // 分组卡片容器已自带列表/卡片布局（.group-items / .cards），这里只切换表头与按钮态
+  if (listHead) listHead.style.display = homeViewMode === 'list' ? 'flex' : 'none';
+  btnList.classList.toggle('on', homeViewMode === 'list');
+  btnCard.classList.toggle('on', homeViewMode === 'card');
 }
 
 // ---------- 首页分组（bridge 共享清单：GET/PUT /groups） ----------
@@ -3215,6 +3197,28 @@ async function moveDocsToGroup(ids: string[], groupId: string | null): Promise<v
   toast(groupId ? `已移动 ${ids.length} 篇到「${groupsManifest.groups.find((g) => g.id === groupId)?.name ?? ''}」` : `已移出 ${ids.length} 篇的分组`, 'success');
 }
 
+/** 相对时间：刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前 / M-D */
+function relTime(ts: number): string {
+  const diff = Date.now() - ts;
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return '昨天';
+  if (days < 7) return `${days} 天前`;
+  return new Date(ts).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+}
+
+/** 分组标识色（按名称稳定取色） */
+const GROUP_COLORS = ['#2563eb', '#0891b2', '#16a34a', '#d97706', '#db2777', '#7c3aed', '#0f766e'];
+function groupColor(name: string): string {
+  let sum = 0;
+  for (const ch of name) sum = (sum + ch.charCodeAt(0) * 31) >>> 0;
+  return GROUP_COLORS[sum % GROUP_COLORS.length]!;
+}
+
 function renderHome(): void {
   void loadGroups().then(() => renderHomeInner());
 }
@@ -3247,28 +3251,31 @@ function renderHomeInner(): void {
     return;
   }
   // 按分组分区：清单里的分组依序在前，未分组在最后
-  const sections: Array<{ gid: string | null; name: string; items: DocEntry[] }> = groupsManifest.groups.map((g) => ({
+  const sections: Array<{ gid: string | null; name: string; color: string; items: DocEntry[] }> = groupsManifest.groups.map((g) => ({
     gid: g.id,
     name: g.name,
+    color: groupColor(g.name),
     items: entries.filter((e) => groupsManifest.assignments[e.id] === g.id),
   }));
   const ungrouped = entries.filter((e) => !groupsManifest.assignments[e.id]);
-  if (ungrouped.length) sections.push({ gid: null, name: '未分组', items: ungrouped });
-  const groupHeaderHtml = (gid: string | null, name: string, count: number): string => `
-    <div class="group-head" data-drop-group="${gid ?? ''}" style="display:flex;align-items:center;gap:8px;padding:12px 6px 8px;margin-top:4px">
-      <span style="font-size:13px;font-weight:700;color:#334155">${gid ? '🗂' : '📄'} ${escapeHtml(name)}</span>
-      <span style="font-size:11px;color:#94a3b8">${count} 篇 · 可拖入</span>
+  if (ungrouped.length) sections.push({ gid: null, name: '未分组', color: '#94a3b8', items: ungrouped });
+  const groupHeaderHtml = (sec: { gid: string | null; name: string; color: string; items: DocEntry[] }): string => `
+    <div class="group-head" data-drop-group="${sec.gid ?? ''}">
+      <span class="group-dot" style="background:${sec.color}"></span>
+      <span class="gname">${escapeHtml(sec.name)}</span>
+      <span class="gcount">${sec.items.length} 篇</span>
+      <span class="ghint">拖动文档到这里归类</span>
       <span style="flex:1"></span>
-      ${gid ? `<button class="btn" data-group-rename="${gid}" style="padding:2px 9px;font-size:11px;border:1px solid #e2e8f0;background:#fff;color:#64748b;border-radius:6px">改名</button>
-               <button class="btn" data-group-del="${gid}" style="padding:2px 9px;font-size:11px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:6px">删除分组</button>` : ''}
+      ${sec.gid ? `<button class="icon-btn" data-group-rename="${escapeHtml(sec.gid)}" title="重命名分组">✎</button>
+                   <button class="icon-btn danger" data-group-del="${escapeHtml(sec.gid)}" title="删除分组">🗑</button>` : ''}
     </div>`;
   grid.innerHTML = sections
     .map(
       (sec) =>
-        groupHeaderHtml(sec.gid, sec.name, sec.items.length) +
-        `<div class="group-items" style="${homeViewMode === 'list' ? '' : 'display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:18px'}">` +
-        sec.items.map((e) => cardHtml(e)).join('') +
-        `</div>`,
+        `<div class="group-card">
+      ${groupHeaderHtml(sec)}
+      <div class="group-items ${homeViewMode === 'card' ? 'cards' : ''}">${sec.items.map((e) => cardHtml(e)).join('')}</div>
+    </div>`,
     )
     .join('');
   ensureHomeBatchBar();
