@@ -194,11 +194,19 @@ export class MindRenderer {
     this.bindEvents();
   }
 
-  setData(nodes: FlatNode[], openAnnCounts?: Map<string, number>): void {
+  setData(nodes: FlatNode[], openAnnCounts?: Map<string, number>, opts?: { skipIntro?: boolean }): void {
     const prevRects = new Map(this.byId);
     this.nodes = nodes;
     this.byId = new Map(nodes.map((n) => [n.id, n]));
     this.openAnnCounts = openAnnCounts ?? new Map();
+    // skipIntro：整树装载（打开/切换文档）时直接完整呈现，
+    // 不做逐节点淡入——避免"根节点先出现、子节点再批量跳出"的割裂感
+    if (opts?.skipIntro) {
+      this.anim.clear();
+      this.dirty = true;
+      this.requestFrame();
+      return;
+    }
     // 记录动画起点：旧位置（或淡入）
     const now = performance.now();
     for (const n of nodes) {

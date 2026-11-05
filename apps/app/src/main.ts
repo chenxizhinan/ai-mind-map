@@ -223,7 +223,8 @@ function relayout(): void {
     if (a.status !== 'open') continue;
     counts.set(a.nodeId, (counts.get(a.nodeId) ?? 0) + 1);
   }
-  renderer.setData(flat, counts);
+  renderer.setData(flat, counts, { skipIntro: skipNextNodeIntro });
+  skipNextNodeIntro = false;
   document.getElementById('stats')!.textContent =
     `${countNodes(store.root).toLocaleString()} 节点 · ${store.document.annotations.filter((a) => a.status === 'open').length} 未解决批注`;
   refreshStatsIfOpen();
@@ -2169,6 +2170,7 @@ function fitView(): void {
 // ---------- 文档装载 ----------
 function loadDoc(d: MindDocument, keepViewport = false): void {
   docLoaded = true;
+  skipNextNodeIntro = true;
   store = DocStore.fromJSON(registry, d);
   // doc 引用 store 内部对象：之后所有编辑都反映在 doc 上，persistCurrent/saveLocal 才不会写旧快照
   doc = store.toJSON();
@@ -2723,6 +2725,9 @@ async function fillRemoteInto(id: string, remoteId: string, allowRetry = true): 
     }
   }
 }
+
+/** 整树装载（loadDoc）后，下一次 relayout 的渲染跳过逐节点入场动画 */
+let skipNextNodeIntro = false;
 
 // ---------- 文档路由（/d/<bridge 文档 id 或本地 id>，列表为 /） ----------
 // 列表页刷新留在列表；编辑页刷新重开原文档；URL 可分享，同事打开即同一篇。
