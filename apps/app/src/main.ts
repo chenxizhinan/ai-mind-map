@@ -3532,6 +3532,7 @@ async function openConnectDialog(): Promise<void> {
           <b style="font-size:13.5px;color:#1e293b">② Skill（团队复用）</b>
           <span style="display:flex;gap:6px">
             <button class="btn conn-copy" data-copy="skill" style="padding:4px 12px;font-size:12px">复制 Skill</button>
+            <button class="btn conn-dl" data-dl="skillpkg" title="含 SKILL.md、references/、scripts/ 的完整技能包" style="padding:4px 12px;font-size:12px;background:#eff6ff;border:1px solid #bfdbfe;color:#2563eb">⬇ 完整技能包 (.zip)</button>
             <button class="btn conn-dl" data-dl="skill" style="padding:4px 12px;font-size:12px">下载 SKILL.md</button>
           </span>
         </div>
@@ -3540,9 +3541,9 @@ async function openConnectDialog(): Promise<void> {
           <span style="font-size:11px;color:#94a3b8">指纹 ${escapeHtml(info?.skillHash ?? '-')} · 更新于 ${escapeHtml((info?.skillUpdatedAt ?? '-').slice(0, 10))}</span>
         </div>
         <div style="font-size:11.5px;color:#64748b;margin-bottom:6px">
-          平台更新技能后版本号变化。<b style="color:#15803d">推荐：已接入 MCP 的 Agent 直接调用 <code>get_skill</code> 即可自动加载最新版</b>（无需重新复制下载）；
-          也可 <code>curl ${escapeHtml(mcpUrl.replace('/mcp', '/skill/raw'))} -o SKILL.md</code> 拉取。完整使用时请同时保留
-          <code>references/</code> 与 <code>scripts/</code>。
+          平台更新技能后版本号变化。<b style="color:#15803d">推荐：已接入 MCP 的 Agent 直接调用 <code>get_skill</code> 即可自动加载最新版</b>（无需重新复制下载）。
+          人工部署请下载<b>完整技能包</b>（含 SKILL.md、references/、scripts/），解压后整体放入 Agent 的技能目录；
+          也可 <code>curl ${escapeHtml(mcpUrl.replace('/mcp', '/skill/raw'))} -o SKILL.md</code> 仅拉取主文件（需自行保留 references/ 与 scripts/）。
         </div>
         <pre id="conn-skill" style="display:none">${escapeHtml(skillText)}</pre>
         <div style="font-size:11.5px;color:#94a3b8">内容已就绪：点上方按钮复制或下载（不占弹窗空间）</div>
@@ -3598,6 +3599,21 @@ async function openConnectDialog(): Promise<void> {
       const key = (btn as HTMLElement).dataset.dl!;
       if (key === 'mcp') download('.mcp.json', mcpHttpText, 'application/json');
       else if (key === 'skill') download('SKILL.md', skillText, 'text/markdown');
+      else if (key === 'skillpkg') {
+        void (async () => {
+          try {
+            const res = await fetch(`${BRIDGE_URL}/skill/package`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const blob = await res.blob();
+            const cd = res.headers.get('Content-Disposition') ?? '';
+            const m = /filename="?([^";]+)"?/.exec(cd);
+            download(m?.[1] ?? 'test-case-designer-skill.zip', blob, 'application/zip');
+            toast('完整技能包已下载（解压后整体放入 Agent 技能目录）', 'success');
+          } catch {
+            toast('技能包下载失败：bridge 不可达', 'error');
+          }
+        })();
+      }
     }),
   );
 }

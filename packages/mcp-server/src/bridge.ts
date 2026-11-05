@@ -28,7 +28,8 @@ import { collectToolExecutors, runToolLoop, type AnthropicLike } from './tool-lo
 import { renderMethodPrompt } from '@ai-mind-map/core';
 import { DirDocManager, SingleDocContext, isValidDocId, type DocContext } from './doc-manager.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { getSkill } from './skill.js';
+import { getSkill, listSkillFiles } from './skill.js';
+import { buildZip } from './zip.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { registerTools } from './tools.js';
 
@@ -323,6 +324,23 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
         const s = getSkill();
         res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8' });
         res.end(s.content);
+        return;
+      }
+      if (url.pathname === '/skill/package' && req.method === 'GET') {
+        // 完整技能包：SKILL.md + references/ + scripts/ 等全部文件
+        const files = listSkillFiles();
+        if (!files.length) {
+          json(res, 404, { error: 'skill package not available' });
+          return;
+        }
+        const s = getSkill();
+        const zip = buildZip(files.map((f) => ({ name: f.path, data: f.data })));
+        res.writeHead(200, {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': `attachment; filename="test-case-designer-skill-v${s.version}.zip"`,
+          'Content-Length': zip.length,
+        });
+        res.end(zip);
         return;
       }
 

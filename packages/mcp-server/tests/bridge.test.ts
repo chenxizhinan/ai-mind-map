@@ -605,3 +605,22 @@ describe('bridge groups API (dir mode)', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('bridge skill package (dir mode)', () => {
+  it('GET /skill/package returns a valid zip containing SKILL.md and references/', async () => {
+    const ctx = setupDir();
+    cleanupDirs.push(ctx.dir);
+    openHandles.push(ctx.handle);
+    const port = await ctx.ready;
+    const res = await fetch(`http://localhost:${port}/skill/package`);
+    expect(res.ok).toBe(true);
+    expect(res.headers.get('Content-Type')).toContain('application/zip');
+    const buf = Buffer.from(await res.arrayBuffer());
+    expect(buf.subarray(0, 2).toString()).toBe('PK'); // ZIP magic
+    expect(buf.length).toBeGreaterThan(1000);
+    // 文件名以存储方式写入 ZIP：可直接在字节流中检索
+    expect(buf.toString('utf8')).toContain('SKILL.md');
+    expect(buf.toString('utf8')).toContain('references/priority-standard.md');
+    expect(buf.toString('utf8')).toContain('scripts/validate-test-cases.js');
+  });
+});

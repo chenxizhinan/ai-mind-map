@@ -6,7 +6,7 @@
  * - version 取自 frontmatter（缺省 1.0.0）；hash 为内容指纹（sha256 前 8 位），
  *   即使忘记改版本号，内容变化也可被客户端识别
  */
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +47,42 @@ export function getSkill(): SkillInfo {
     return cached.info;
   }
   return { content: '', version: '0.0.0', hash: '', updatedAt: '' };
+}
+
+/** 递归收集技能目录内全部文件（相对路径），用于打包完整技能包 */
+export function listSkillFiles(): Array<{ path: string; data: Buffer }> {
+  const out: Array<{ path: string; data: Buffer }> = [];
+  for (const dir of skillDirs()) {
+    if (!existsSync(resolve(dir, SKILL_MAIN))) continue;
+    const seen = new Set<string>();
+    const walk = (rel: string): void => {
+      const abs = resolve(dir, rel);
+      let names: string[] = [];
+      try {
+        names = readdirSync(abs);
+      } catch {
+        return;
+      }
+      for (const name of names) {
+        const r = rel && rel !== '.' ? `${rel}/${name}` : name;
+        const ap = resolve(dir, r);
+        let st;
+        try {
+          st = statSync(ap);
+        } catch {
+          continue;
+        }
+        if (st.isDirectory()) walk(r);
+        else if (st.isFile() && !seen.has(r)) {
+          seen.add(r);
+          out.push({ path: r, data: readFileSync(ap) });
+        }
+      }
+    };
+    walk('.');
+    if (out.length) break; // 用第一个存在的技能目录
+  }
+  return out;
 }
 
 /** 读取技能目录内的附加文件（references/ scripts/ 等）；拒绝路径穿越 */
