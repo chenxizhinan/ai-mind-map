@@ -2489,7 +2489,20 @@ async function pushRemote(): Promise<void> {
       });
       if (res.ok) {
         const r = (await res.json().catch(() => null)) as { updatedAt?: string } | null;
-        if (r?.updatedAt) remoteVersionByRemote.set(rid, r.updatedAt);
+        if (r?.updatedAt) {
+          remoteVersionByRemote.set(rid, r.updatedAt);
+          // 同步写回本地槽位：刷新后新会话的 If-Match 基准与服务器一致，避免无谓 409
+          try {
+            const raw = localStorage.getItem(DOC_PREFIX + senderId);
+            if (raw) {
+              const slot = JSON.parse(raw) as MindDocument;
+              slot.meta.updatedAt = r.updatedAt;
+              localStorage.setItem(DOC_PREFIX + senderId, JSON.stringify(slot));
+            }
+          } catch {
+            /* 存储满等：下次会话首存可能 409，走冲突恢复流程即可 */
+          }
+        }
       } else if (res.status === 409) {
         await handleRemoteConflict(rid);
       } else if (res.status === 404) {
@@ -2732,6 +2745,9 @@ function openDoc(id: string): void {
   if (d && entry?.remoteId && countTreeNodes(d.tree) <= 1 && (entry.nodeCount ?? 0) > 1) {
     d = null;
   }
+  // 版本基准：槽位的 meta.updatedAt 即上次成功推送后服务器返回的版本，
+  // 以此作为本次会话首次 PUT 的 If-Match（避免刷新后首存就吃 409）
+  if (d && entry?.remoteId) remoteVersionByRemote.set(entry.remoteId, d.meta.updatedAt ?? '');
   // 槽位为空（remoteOnly / 数据损坏）：装载「空白占位」而不是演示文档。
   // 演示内容一旦被当作占位保存/推送，会把 bridge 上的真实文档覆盖成「订单中心 · 回归测试」。
   pendingRemoteFill = !d;
