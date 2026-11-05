@@ -460,7 +460,33 @@ function editorEl(): HTMLDivElement {
 }
 
 function selectId(id: string): void {
-  selected = lastFlat.find((n) => n.id === id) ?? null;
+  const storeNode = store.getNode(id);
+  const flat = lastFlat.find((n) => n.id === id) ?? null;
+  if (storeNode && !flat) {
+    // 大纲视图可点击画布上未展开（不可见）的节点：用 store 数据构造最小
+    // FlatNode，详情面板照常展示（画布选中高亮为无害空操作）
+    let depth = 0;
+    let p = store.getParent(id);
+    while (p) {
+      depth++;
+      p = store.getParent(p.id);
+    }
+    selected = {
+      id,
+      type: storeNode.type,
+      text: storeNode.text,
+      props: storeNode.props,
+      depth,
+      parentId: store.getParent(id)?.id ?? null,
+      x: 0,
+      y: 0,
+      w: 0,
+      h: 0,
+      hidden: true,
+    } as FlatNode;
+  } else {
+    selected = flat;
+  }
   renderer.select(id);
   renderPanel();
 }
