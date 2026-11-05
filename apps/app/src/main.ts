@@ -3532,8 +3532,7 @@ async function openConnectDialog(): Promise<void> {
           <b style="font-size:13.5px;color:#1e293b">② Skill（团队复用）</b>
           <span style="display:flex;gap:6px">
             <button class="btn conn-copy" data-copy="skill" style="padding:4px 12px;font-size:12px">复制 Skill</button>
-            <button class="btn conn-dl" data-dl="skillpkg" title="含 SKILL.md、references/、scripts/ 的完整技能包" style="padding:4px 12px;font-size:12px;background:#eff6ff;border:1px solid #bfdbfe;color:#2563eb">⬇ 完整技能包 (.zip)</button>
-            <button class="btn conn-dl" data-dl="skill" style="padding:4px 12px;font-size:12px">下载 SKILL.md</button>
+            <button class="btn conn-dl" data-dl="skillpkg" title="含 SKILL.md、references/、scripts/ 的完整技能包" style="padding:4px 12px;font-size:12px;background:#eff6ff;border:1px solid #bfdbfe;color:#2563eb">⬇ 下载技能包 (.zip)</button>
           </span>
         </div>
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
@@ -3543,7 +3542,7 @@ async function openConnectDialog(): Promise<void> {
         <div style="font-size:11.5px;color:#64748b;margin-bottom:6px">
           平台更新技能后版本号变化。<b style="color:#15803d">推荐：已接入 MCP 的 Agent 直接调用 <code>get_skill</code> 即可自动加载最新版</b>（无需重新复制下载）。
           人工部署请下载<b>完整技能包</b>（含 SKILL.md、references/、scripts/），解压后整体放入 Agent 的技能目录；
-          也可 <code>curl ${escapeHtml(mcpUrl.replace('/mcp', '/skill/raw'))} -o SKILL.md</code> 仅拉取主文件（需自行保留 references/ 与 scripts/）。
+          也可 <code>curl ${escapeHtml(mcpUrl.replace('/mcp', '/skill/package'))} -o skill.zip</code> 拉取完整包。
         </div>
         <pre id="conn-skill" style="display:none">${escapeHtml(skillText)}</pre>
         <div style="font-size:11.5px;color:#94a3b8">内容已就绪：点上方按钮复制或下载（不占弹窗空间）</div>
@@ -3598,7 +3597,6 @@ async function openConnectDialog(): Promise<void> {
     btn.addEventListener('click', () => {
       const key = (btn as HTMLElement).dataset.dl!;
       if (key === 'mcp') download('.mcp.json', mcpHttpText, 'application/json');
-      else if (key === 'skill') download('SKILL.md', skillText, 'text/markdown');
       else if (key === 'skillpkg') {
         void (async () => {
           try {
