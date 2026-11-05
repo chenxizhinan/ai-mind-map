@@ -77,7 +77,7 @@ function saveLocal(): void {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    if (!pendingRemoteFill) persistCurrent(); // 占位等待远端填充期间不落盘
+    if (docDirty && !pendingRemoteFill) persistCurrent(); // 只有内容真正修改过才落盘
     if (currentDocId) {
       try {
         localStorage.setItem(LS_EXPANDED + ':' + currentDocId, JSON.stringify([...(expandedIds ?? [])]));
@@ -85,7 +85,7 @@ function saveLocal(): void {
         /* 存储满：静默 */
       }
     }
-    void pushRemote(); // 桥接在线时同步给远端（内部静默失败）
+    if (docDirty && !pendingRemoteFill) void pushRemote(); // 纯查看不推送
   }, 800);
 }
 
@@ -111,6 +111,12 @@ let editingId = false;
 let editingNodeId: string | null = null;
 
 /**
+ * 内容脏标记：只有真实的内容修改（snapshot）才置位；
+ * 纯查看/折叠切换不落盘不推送——避免"只查看也触发自动保存"。
+ */
+let docDirty = false;
+
+/**
  * true = 当前文档内容是「空白占位」，正在等待 bridge 填充真实内容。
  * 占位期间禁止落盘/推送：曾因把演示文档当占位装载并自动保存，
  * 将 bridge 上的真实文档覆盖成了「订单中心 · 回归测试」。
@@ -126,6 +132,7 @@ let suppress = false;
 /** 在 mutation 之前调用，保存变更前状态 */
 function snapshot(): void {
   if (suppress || !store) return;
+  docDirty = true;
   // 用户显式编辑占位文档：视为接受当前内容，恢复正常落盘/推送（bridge 离线时不至于永远锁死）
   pendingRemoteFill = false;
   // 用户显式编辑「本地专用文档」（冲突备份等）：它升级为普通文档，恢复参与同步
@@ -670,7 +677,7 @@ function persistExpandedNow(): void {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
-  if (!pendingRemoteFill) persistCurrent(); // 占位等待远端填充期间不落盘
+  if (docDirty && !pendingRemoteFill) persistCurrent(); // 占位/未修改期间不落盘
   if (currentDocId) {
     try {
       localStorage.setItem(LS_EXPANDED + ':' + currentDocId, JSON.stringify([...(expandedIds ?? [])]));
@@ -2227,6 +2234,7 @@ function fitView(): void {
 // ---------- 文档装载 ----------
 function loadDoc(d: MindDocument, keepViewport = false): void {
   docLoaded = true;
+  docDirty = false; // 新装载的内容视为未修改
   skipNextNodeIntro = true;
   store = DocStore.fromJSON(registry, d);
   // doc 引用 store 内部对象：之后所有编辑都反映在 doc 上，persistCurrent/saveLocal 才不会写旧快照
@@ -2567,45 +2575,46 @@ function rollbackRemoteId(docId: string, stableId: string): void {
 }
 
 /**
- * PUT 收到 409（乐观锁）：文档已被其他浏览器/Agent 写过。
- * 内容一致 → 仅更新版本号（回声）；内容不同 → 先把本地版本备份为独立本地文档，
- * 再加载远端最新内容。绝不静默覆盖他人修改，也不丢自己的修改。
+ * 409 时把本地状态提交给 bridge 做三方合并（服务端以共同祖先为基准做节点级 diff3），
+ * 加载合并结果并立即推送。不再生成「冲突备份」文档。
  */
-async function handleRemoteConflict(rid: string): Promise<void> {
+async function mergeWithServer(rid: string, baseUpdatedAt: string | null): Promise<void> {
   try {
-    const res = await fetch(`${BRIDGE_URL}/doc/${encodeURIComponent(rid)}`);
+    const res = await fetch(`${BRIDGE_URL}/doc/${encodeURIComponent(rid)}/merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUpdatedAt, doc: store.toJSON() }),
+    });
     if (!res.ok) return;
-    const remote = (await res.json()) as MindDocument;
-    lastPullAtByRemote.set(rid, Date.now());
-    remoteVersionByRemote.set(rid, remote.meta.updatedAt ?? '');
-    const sameContent =
-      doc.tree === remote.tree ||
-      (JSON.stringify({ t: doc.tree, a: doc.annotations }) ===
-        JSON.stringify({ t: remote.tree, a: remote.annotations }) &&
-        doc.meta.title === remote.meta.title);
-    if (sameContent) {
-      syncDocTitle();
-      return;
-    }
-    const backupId = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const stamp = new Date().toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-    const backupTitle = `${doc.meta.title || '未命名导图'}（冲突备份 ${stamp}）`;
+    const r = (await res.json()) as {
+      merged: MindDocument;
+      updatedAt: string;
+      stats?: { addedMine?: number; addedTheirs?: number; deleted?: number; conflicts?: Array<unknown> };
+    };
+    remoteVersionByRemote.set(rid, r.updatedAt);
     try {
-      localStorage.setItem(DOC_PREFIX + backupId, JSON.stringify(store.toJSON()));
-      const entries = loadDocsIndex();
-      entries.unshift({ id: backupId, title: backupTitle, updatedAt: Date.now(), keepLocalOnly: true });
-      saveDocsIndex(entries);
+      if (currentDocId) {
+        const raw = localStorage.getItem(DOC_PREFIX + currentDocId);
+        if (raw) {
+          const slot = JSON.parse(raw) as MindDocument;
+          slot.meta.updatedAt = r.updatedAt;
+          localStorage.setItem(DOC_PREFIX + currentDocId, JSON.stringify(slot));
+        }
+      }
     } catch {
-      /* 存储满：放弃备份也要加载远端最新，避免停留在过期版本上继续编辑 */
+      /* ignore */
     }
     pendingRemoteFill = false;
-    loadDoc(remote, true);
+    loadDoc(r.merged, true);
     syncDocTitle();
-    toast(`远端文档已被他人修改：你的版本已备份为「${backupTitle}」，当前显示远端最新内容`, 'warn');
-    const home = document.getElementById('home-view');
-    if (home && home.style.display !== 'none') renderHome();
+    lastPullAtByRemote.delete(rid); // 合并结果是本地真实修改，需要立即推送
+    void pushRemote();
+    const st = r.stats;
+    const parts = [`本地 +${st?.addedMine ?? 0} 节点`, `远端 +${st?.addedTheirs ?? 0} 节点`];
+    if (st?.conflicts?.length) parts.push(`${st.conflicts.length} 处同节点修改（双方版本已保留并批注）`);
+    toast(`检测到并发修改，已自动合并：${parts.join('，')}`, st?.conflicts?.length ? 'warn' : 'success');
   } catch {
-    /* bridge 不可达：保持本地内容，下次保存会再次尝试 */
+    /* bridge 不可达：保持本地内容，下次保存重试 */
   }
 }
 
@@ -2658,7 +2667,7 @@ async function pushRemote(): Promise<void> {
           }
         }
       } else if (res.status === 409) {
-        await handleRemoteConflict(rid);
+        await mergeWithServer(rid, version ?? null);
       } else if (res.status === 404) {
         // 远端文档已被删除：清掉失效 remoteId 并同步列表，避免反复往已删除的 id 写（复活文件）
         const cur = loadDocsIndex().find((e) => e.id === senderId);
@@ -2740,7 +2749,7 @@ let currentDocId: string | null = localStorage.getItem(LAST_DOC_KEY);
 
 /** 把当前 doc/store 的内容保存到其文档槽位并更新索引 */
 function persistCurrent(): void {
-  if (!currentDocId) return;
+  if (!currentDocId || !docDirty) return; // 纯查看/占位：不写任何内容
   try {
     localStorage.setItem(DOC_PREFIX + currentDocId, JSON.stringify(doc));
     touchDocEntry(currentDocId, store.document.meta.title || '未命名导图');

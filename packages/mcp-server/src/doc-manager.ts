@@ -10,7 +10,7 @@
  */
 import { readdirSync, existsSync, statSync, readFileSync, unlinkSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, basename, extname } from 'node:path';
-import { DocStore, NodeTypeRegistry } from '@ai-mind-map/core';
+import { DocStore, NodeTypeRegistry, type MindDocument } from '@ai-mind-map/core';
 import { save } from './store.js';
 
 export interface DocSummary {
@@ -53,6 +53,8 @@ export interface DocContext {
   /** 分组清单（可选：仅 --dir 模式支持；单文件模式无分组） */
   getGroups?(): GroupsManifest;
   setGroups?(input: { groups?: unknown; assignments?: unknown }): GroupsManifest;
+  /** 三方合并用的共同祖先快照（可选：仅 --dir 模式支持） */
+  getHistoryDoc?(id: string, updatedAt: string): MindDocument | null;
 }
 
 interface Slot {
@@ -158,6 +160,7 @@ export class DirDocManager implements DocContext {
     if (!id) return;
     const slot = this.loadSlot(id);
     if (!slot) return;
+    this.recordHistory(id, slot.store.toJSON());
     const fp = this.fileOf(id);
     // 落盘前防串写校验：文件被其他进程（另一 MCP 实例/手工编辑）改过或删除时拒绝写，
     // 避免用本进程内存里的旧副本覆盖别人的修改；删除后的写入也不再"复活"文件。
@@ -288,6 +291,7 @@ export class DirDocManager implements DocContext {
   putDoc(id: string, raw: unknown): string {
     if (!isValidDocId(id)) throw new Error(`非法文档 id: ${id}`);
     const store = DocStore.fromJSON(this.registry, raw);
+    this.recordHistory(id, store.toJSON());
     const fp = this.fileOf(id);
     save(store, fp);
     this.slots.set(id, { store, filePath: fp });
@@ -311,6 +315,7 @@ export class DirDocManager implements DocContext {
     this.slots.delete(id);
     this.known.delete(id);
     this.dirty.delete(id);
+    this.history.delete(id);
     if (this.activeId === id) this.activeId = null;
     return existed;
   }
@@ -356,6 +361,24 @@ export class DirDocManager implements DocContext {
 
   private groupsPath(): string {
     return join(this.dir, '.groups.json');
+  }
+
+  /** 版本历史（共同祖先快照）：docId → 最近几次 {updatedAt, 文档 JSON}，供三方合并取 base */
+  private history = new Map<string, Array<{ updatedAt: string; doc: MindDocument }>>();
+
+  private recordHistory(id: string, doc: MindDocument): void {
+    const arr = this.history.get(id) ?? [];
+    arr.push({ updatedAt: doc.meta.updatedAt, doc });
+    if (arr.length > 3) arr.shift(); // 保留最近 3 个版本（内存友好）
+    this.history.set(id, arr);
+  }
+
+  /** 按版本号取共同祖先快照；找不到返回 null（合并退化为并集） */
+  getHistoryDoc(id: string, updatedAt: string): MindDocument | null {
+    if (!isValidDocId(id)) return null;
+    const arr = this.history.get(id);
+    if (!arr) return null;
+    return arr.find((h) => h.updatedAt === updatedAt)?.doc ?? null;
   }
 
   /** 读取分组清单；文件不存在/损坏时返回空清单 */

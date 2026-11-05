@@ -29,6 +29,7 @@ import { renderMethodPrompt } from '@ai-mind-map/core';
 import { DirDocManager, SingleDocContext, isValidDocId, type DocContext } from './doc-manager.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getSkill, listSkillFiles } from './skill.js';
+import { mergeThreeWay } from './merge.js';
 import { buildZip } from './zip.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { registerTools } from './tools.js';
@@ -275,6 +276,54 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
               },
             },
           },
+        });
+        return;
+      }
+
+      // ---- 三方合并端点：客户端版本冲突时提交本地状态，服务端做节点级 diff3 ----
+      const mergeMatch = /^\/doc\/([^/]+)\/merge$/.exec(url.pathname);
+      if (mergeMatch && req.method === 'POST') {
+        if (!isDir || !opts.docs.getHistoryDoc) {
+          json(res, 404, { error: 'merge requires --dir mode' });
+          return;
+        }
+        const rawMerge = await readBody(req);
+        const mergeId = decodeURIComponent(mergeMatch[1]!);
+        if (!isValidDocId(mergeId)) {
+          json(res, 400, { error: 'invalid doc id' });
+          return;
+        }
+        await enqueue(async () => {
+          try {
+            const body = JSON.parse(rawMerge) as { baseUpdatedAt?: string; doc?: unknown };
+            if (!body.doc) {
+              json(res, 400, { error: 'doc required' });
+              return;
+            }
+            const theirs = opts.docs.byId(mergeId);
+            if (!theirs) {
+              json(res, 404, { error: `document not found: ${mergeId}` });
+              return;
+            }
+            const baseUpdatedAt = typeof body.baseUpdatedAt === 'string' ? body.baseUpdatedAt : null;
+            const base = baseUpdatedAt ? (opts.docs.getHistoryDoc?.(mergeId, baseUpdatedAt) ?? null) : null;
+            const result = mergeThreeWay(base, body.doc as MindDocument, theirs.toJSON());
+            opts.docs.putDoc(mergeId, result.merged);
+            const saved = opts.docs.byId(mergeId)!;
+            broadcast(mergeId, saved.document.meta.title);
+            json(res, 200, {
+              merged: saved.toJSON(),
+              updatedAt: saved.document.meta.updatedAt,
+              stats: {
+                addedMine: result.stats.addedMine,
+                addedTheirs: result.stats.addedTheirs,
+                deleted: result.stats.deleted,
+                conflicts: result.stats.conflicts,
+              },
+            });
+          } catch (e) {
+            json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+          }
         });
         return;
       }
