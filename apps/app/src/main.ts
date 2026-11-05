@@ -2602,6 +2602,7 @@ async function fillRemoteInto(id: string, remoteId: string, allowRetry = true): 
     lastPullAtByRemote.set(remoteId, Date.now()); // 内容源自 bridge：抑制紧接着的回推
     loadDoc(remote, false);
     syncDocTitle();
+    touchDocEntry(id, remote.meta.title || '未命名导图'); // 修回条目标题（自愈被占位覆盖的情况）
     updateDocUrl(); // 挂载后拿到 remoteId：URL 升级为全局文档 id
   } catch {
     /* bridge 未启动 / 文档已删除：保持空白占位；稍后自动重试一次 */
@@ -2658,7 +2659,12 @@ function docKeyFromLocation(): string {
 function applyRouteFromLocation(): void {
   const key = docKeyFromLocation();
   if (!key) {
-    if (!docLoaded) loadDoc(blankDoc('未命名导图'), false);
+    if (!docLoaded) {
+      // 占位文档不绑定任何真实文档：否则首页 persistCurrent 会把空白内容
+      // 覆盖进「最后打开的文档」的本地槽位，并把索引标题改成「未命名导图」
+      loadDoc(blankDoc('未命名导图'), false);
+      currentDocId = null;
+    }
     showHome(true);
     return;
   }
@@ -2689,6 +2695,7 @@ function applyRouteFromLocation(): void {
     } catch {
       toast('链接指向的文档不存在，或 bridge 暂不可达', 'warn');
       loadDoc(blankDoc('未命名导图'), false);
+      currentDocId = null;
       showHome(true);
     }
   })();
@@ -2718,6 +2725,11 @@ function openDoc(id: string): void {
   // 清空撤销栈：history 是全局的，跨文档恢复会把上一篇快照灌进当前文档
   history = [];
   future = [];
+  // 自愈：本地槽位几乎是空的，但索引记录该文档在远端有实质内容——
+  // 说明槽位曾被空白占位覆盖（启动占位绑定 bug），从 bridge 恢复真实内容
+  if (d && entry?.remoteId && countTreeNodes(d.tree) <= 1 && (entry.nodeCount ?? 0) > 1) {
+    d = null;
+  }
   // 槽位为空（remoteOnly / 数据损坏）：装载「空白占位」而不是演示文档。
   // 演示内容一旦被当作占位保存/推送，会把 bridge 上的真实文档覆盖成「订单中心 · 回归测试」。
   pendingRemoteFill = !d;
@@ -2808,15 +2820,18 @@ function cardHtml(e: DocEntry): string {
   `;
 }
 
+/** 树节点总数（含根） */
+function countTreeNodes(n: { children?: unknown[] }): number {
+  return 1 + (n.children ?? []).reduce((acc: number, c) => acc + countTreeNodes(c as { children?: unknown[] }), 0);
+}
+
 /** 文档节点数（读槽位 JSON 粗算，卡片展示用） */
 function docNodeCount(id: string): number {
   try {
     const raw = localStorage.getItem(DOC_PREFIX + id);
     if (!raw) return 0;
     const d = JSON.parse(raw) as MindDocument;
-    const count = (n: { children?: unknown[] }): number =>
-      1 + (n.children ?? []).reduce((acc: number, c) => acc + count(c as { children?: unknown[] }), 0);
-    return count(d.tree) - 1; // 不含根
+    return countTreeNodes(d.tree) - 1; // 不含根
   } catch {
     return 0;
   }
