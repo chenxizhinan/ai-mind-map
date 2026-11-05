@@ -260,7 +260,7 @@ describe('DirDocManager.openDoc 按名称解析（用户不知道文件 id）', 
     dirs.push(dir);
     const m = new DirDocManager(makeRegistry(), dir);
     m.createDoc({ title: '订单中心 · 回归测试' });
-    m.createDoc({ title: '订单中心回归测试（副本）' });
+    m.createDoc({ title: '订单中心回归测试副本' });
     let msg = '';
     try {
       m.openDoc({ title: '订单中心' });
@@ -271,7 +271,8 @@ describe('DirDocManager.openDoc 按名称解析（用户不知道文件 id）', 
     expect(msg).toContain('匹配到多篇');
     expect(msg).toContain('订单中心 · 回归测试');
     // 从报错里取第一个候选 id，按 id 打开成功
-    const id = /([^\s；;（(]+)（/.exec(msg)?.[1] ?? '';
+    const first = (msg.split('指定: ')[1] ?? '').split('；')[0] ?? '';
+    const id = first.split(' → ')[0].trim();
     expect(id).toBeTruthy();
     expect(m.openDoc({ id }).title).toContain('订单中心');
   });

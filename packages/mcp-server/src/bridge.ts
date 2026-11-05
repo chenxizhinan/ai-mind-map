@@ -28,6 +28,7 @@ import { collectToolExecutors, runToolLoop, type AnthropicLike } from './tool-lo
 import { renderMethodPrompt } from '@ai-mind-map/core';
 import { DirDocManager, SingleDocContext, isValidDocId, type DocContext } from './doc-manager.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { getSkill } from './skill.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { registerTools } from './tools.js';
 
@@ -248,10 +249,14 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
         const hostHeader = req.headers.host ?? `localhost:${opts.port}`;
         const bridgeUrl = `http://${hostHeader}`;
         const mcpUrl = `${bridgeUrl}/mcp`;
+        const skill = getSkill();
         json(res, 200, {
           bridgeUrl,
           mode,
           target,
+          skillVersion: skill.version,
+          skillHash: skill.hash,
+          skillUpdatedAt: skill.updatedAt,
           /** MCP Streamable HTTP 端点：远程 Agent 直接 import 该 URL 即可使用 */
           mcpUrl,
           /** 推荐配置：远程 HTTP MCP（Claude Code / Codex / Cursor 等，复制即用） */
@@ -308,7 +313,19 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
         return;
       }
 
-      // ---- 分组清单（仅 --dir 模式；首页按分组组织文档） ----
+      // ---- 技能（test-case-designer）：平台更新后 Agent/前端从这里取最新版 ----
+      if (url.pathname === '/skill' && req.method === 'GET') {
+        const s = getSkill();
+        json(res, 200, { version: s.version, hash: s.hash, updatedAt: s.updatedAt, content: s.content });
+        return;
+      }
+      if (url.pathname === '/skill/raw' && req.method === 'GET') {
+        const s = getSkill();
+        res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8' });
+        res.end(s.content);
+        return;
+      }
+
       if (url.pathname === '/groups' && (req.method === 'GET' || req.method === 'PUT')) {
         if (!isDir || !opts.docs.getGroups || !opts.docs.setGroups) {
           json(res, 404, { error: 'groups require --dir mode' });

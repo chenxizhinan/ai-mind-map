@@ -31,6 +31,7 @@ const SYSTEM_PROMPT = [
   '你是测试用例脑图的 AI 助手，可以直接用工具读写脑图文档。',
   '',
   '工作方式：',
+  '0. 会话开始先调用 get_skill 获取 test-case-designer 技能的最新版本与规范（平台可能已更新，禁止凭记忆使用旧规范）；',
   '1. 会话开始先 list_documents 了解现有文档；用户要求生成新的用例集/新脑图时务必 create_document 新建文档（会出现在应用首页），严禁往现有文档里灌或覆盖；',
   '   用户要求更新某篇既有文档时，先 open_document（title 或 id）定位，并保存返回的 id。',
   '1b. 用户只会用名称或简称指代文档（如「编辑 hades 用例」「更新 BYOS 那篇」），绝不会知道文件 id：',
@@ -108,6 +109,16 @@ const TOOL_DEFS: ToolDef[] = [
       type: 'object',
       properties: { title: { type: 'string', description: '文档标题，作为根节点文本与文件名来源' } },
       required: ['title'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get_skill',
+    description:
+      '获取 test-case-designer 技能的最新版本内容与版本信息。平台更新技能后调用即可加载最新规范，无需依赖本地副本',
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', description: '可选：技能包内附加文件相对路径（如 references/xxx.md）' } },
       additionalProperties: false,
     },
   },

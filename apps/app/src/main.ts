@@ -3435,6 +3435,10 @@ interface BridgeConnectInfo {
   bridgeUrl: string;
   mode: 'dir' | 'file';
   target: string;
+  /** test-case-designer 技能当前版本（bridge 侧持有最新版） */
+  skillVersion?: string;
+  skillHash?: string;
+  skillUpdatedAt?: string;
   /** MCP Streamable HTTP 端点（远程接入，复制即用） */
   mcpUrl?: string;
   mcpHttpJson?: { mcpServers: Record<string, { type: 'http'; url: string }> };
@@ -3474,7 +3478,7 @@ async function openConnectDialog(): Promise<void> {
   const skillText = __AI_MIND_MAP_SKILL__;
 
   const chatHint = `我在用 ai-mind-map 管理测试用例脑图（MCP 已连接）。
-请读取 <方案文档或代码目录>，然后：
+请先调用 get_skill 获取最新的 test-case-designer 技能规范（平台更新后自动加载最新版），然后读取 <方案文档或代码目录>：
 1. 先 list_documents 看现有文档；
 2. 用 create_document 新建一篇脑图（标题 = 方案名），保存返回的 id；
 3. 后续 query_tree / get_test_methods / add_subtree / validate_document 每次都显式传这个 docId，按「模块 → 小节 → 用例」挂载，用例 props 带 priority / expected / remark（来源引用）。
@@ -3531,9 +3535,13 @@ async function openConnectDialog(): Promise<void> {
             <button class="btn conn-dl" data-dl="skill" style="padding:4px 12px;font-size:12px">下载 SKILL.md</button>
           </span>
         </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+          <span style="font-size:11px;font-weight:600;color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:999px;padding:1px 8px">技能版本 v${escapeHtml(info?.skillVersion ?? '?')}</span>
+          <span style="font-size:11px;color:#94a3b8">指纹 ${escapeHtml(info?.skillHash ?? '-')} · 更新于 ${escapeHtml((info?.skillUpdatedAt ?? '-').slice(0, 10))}</span>
+        </div>
         <div style="font-size:11.5px;color:#64748b;margin-bottom:6px">
-          复制或下载的内容与仓库最新
-          <code>.agents/skills/test-case-designer/SKILL.md</code> 一致；完整使用时请同时保留该目录下的
+          平台更新技能后版本号变化。<b style="color:#15803d">推荐：已接入 MCP 的 Agent 直接调用 <code>get_skill</code> 即可自动加载最新版</b>（无需重新复制下载）；
+          也可 <code>curl ${escapeHtml(mcpUrl.replace('/mcp', '/skill/raw'))} -o SKILL.md</code> 拉取。完整使用时请同时保留
           <code>references/</code> 与 <code>scripts/</code>。
         </div>
         <pre id="conn-skill" style="display:none">${escapeHtml(skillText)}</pre>

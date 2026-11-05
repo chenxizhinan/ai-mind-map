@@ -11,6 +11,7 @@ import { loadOrCreate, save } from './store.js';
 import { writeFileSync, readFileSync } from 'node:fs';
 import { encodeXmind, encodeMarkdown, renderMethodPrompt, TEST_DESIGN_METHODS } from '@ai-mind-map/core';
 import { singleDocContext, type DocContext } from './doc-manager.js';
+import { getSkill, readSkillFile } from './skill.js';
 // @ts-expect-error skill 脚本是无类型的 JS，动态能力在这里只用到 validateDocument 的返回形状
 import { validateDocument } from '../../../.agents/skills/test-case-designer/scripts/validate-test-cases.js';
 
@@ -59,6 +60,36 @@ export function registerTools(
   server: McpServer,
   opts: RegisterToolsCtx & RegisterToolsOptions,
 ): void {
+  server.tool(
+    'get_skill',
+    '获取 test-case-designer 技能的最新版本内容与版本信息。平台更新技能后，调用即可加载最新规范，无需依赖本地复制的副本',
+    {
+      file: z
+        .string()
+        .optional()
+        .describe('可选：技能包内附加文件相对路径（如 references/xxx.md）；缺省返回 SKILL.md 主文件'),
+    },
+    async ({ file }) => {
+      try {
+        if (file) {
+          const f = readSkillFile(file);
+          if (!f) return err(new Error(`技能文件不存在: ${file}`));
+          return { content: [{ type: 'text', text: f.content }] };
+        }
+        const s = getSkill();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ version: s.version, hash: s.hash, updatedAt: s.updatedAt, content: s.content }),
+            },
+          ],
+        };
+      } catch (e) {
+        return err(e);
+      }
+    },
+  );
   const ctx: DocContext = resolveCtx(opts);
   const store = (docId?: string): import('@ai-mind-map/core').DocStore => {
     if (docId) {

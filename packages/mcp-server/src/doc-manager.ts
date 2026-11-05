@@ -234,7 +234,7 @@ export class DirDocManager implements DocContext {
         if (hits.length > 1) {
           throw new Error(
             `「${ref.title}」模糊匹配到多篇文档，请用 id 或更具体的名称指定: ${hits
-              .map((d) => `${d.id}（${d.title}）`)
+              .map((d) => `${d.id} → ${d.title}`)
               .join('；')}`,
           );
         }
