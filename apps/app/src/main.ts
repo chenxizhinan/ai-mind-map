@@ -3037,63 +3037,53 @@ function createDoc(title?: string, templateId = 'blank'): string {
   return id;
 }
 
-/** 首页条目：list=列表行（文件名 + 行内操作）；card=网格卡片 */
-function cardHtml(e: DocEntry): string {
+const cardHtml = (e: DocEntry): string => {
   const initial = (e.title || '?').slice(0, 1);
-  const when = e.updatedAt
-    ? new Date(e.updatedAt).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-    : '—';
-  const hues = ['#3b82f6', '#22d3ee', '#4ade80', '#f59e0b', '#f472b6', '#a78bfa', '#34d399'];
-  const accent = hues[(e.title || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0) % hues.length]!;
   const nodeCount = e.nodeCount ?? docNodeCount(e.id);
   const check = homeBatchMode
-    ? `<input type="checkbox" data-check="${e.id}" ${selectedDocIds.has(e.id) ? 'checked' : ''} style="width:15px;height:15px;accent-color:#2563eb;cursor:pointer;flex-shrink:0">`
+    ? `<input type="checkbox" class="doc-check" data-check="${e.id}" ${selectedDocIds.has(e.id) ? 'checked' : ''}>`
     : '';
+  const hues = ['#2563eb', '#0891b2', '#16a34a', '#d97706', '#db2777', '#7c3aed', '#0f766e'];
+  const accent = hues[(e.title || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0) % hues.length]!;
 
   if (homeViewMode === 'card') {
     return `
-    <div class="doc-row" data-id="${e.id}" draggable="true" style="position:relative;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px;cursor:pointer;box-shadow:0 1px 3px rgba(15,23,42,0.04);transition:transform 0.16s ease,box-shadow 0.16s ease,border-color 0.16s ease"
-      onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 10px 28px rgba(15,23,42,0.10)';this.style.borderColor='#bfdbfe'"
-      onmouseout="this.style.transform='';this.style.boxShadow='0 1px 3px rgba(15,23,42,0.04)';this.style.borderColor='#e2e8f0'">
-      ${homeBatchMode ? `<label style="position:absolute;top:12px;left:12px;cursor:pointer"><input type="checkbox" data-check="${e.id}" ${selectedDocIds.has(e.id) ? 'checked' : ''} style="width:16px;height:16px;accent-color:#2563eb;cursor:pointer"></label>` : ''}
-      <div style="position:absolute;top:16px;right:16px;width:8px;height:8px;border-radius:50%;background:${accent}"></div>
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-        <div style="width:40px;height:40px;border-radius:11px;background:linear-gradient(135deg,${accent},${accent}cc);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px;flex-shrink:0">${escapeHtml(initial)}</div>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:14.5px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.title)}</div>
-          <div style="font-size:11px;color:#94a3b8;margin-top:2px">${when}</div>
+    <div class="doc-card" data-id="${e.id}" draggable="true">
+      ${homeBatchMode ? `<input type="checkbox" class="doc-check" data-check="${e.id}" ${selectedDocIds.has(e.id) ? 'checked' : ''} style="position:absolute;top:12px;right:12px">` : ''}
+      <div class="dc-head">
+        <div class="doc-avatar" style="background:linear-gradient(135deg,${accent},${accent}cc)">${escapeHtml(initial)}</div>
+        <div class="dc-title-wrap">
+          <div class="doc-title">${escapeHtml(e.title)}</div>
+          <div class="doc-sub">${relTime(e.updatedAt)} · ${nodeCount.toLocaleString()} 节点</div>
         </div>
       </div>
-      <div style="font-size:11.5px;color:#64748b;margin-bottom:12px">🗂 ${nodeCount.toLocaleString()} 节点</div>
-      <div class="doc-actions" style="display:flex;gap:8px">
-        <button class="btn" data-open="${e.id}" style="flex:1;background:#eff6ff;border:1px solid #bfdbfe;color:#2563eb;padding:6px 10px;border-radius:8px;font-size:12.5px">打开</button>
-        <button class="btn" data-rename="${e.id}" title="重命名" style="background:#fff;border:1px solid #e2e8f0;color:#64748b;padding:6px 9px;border-radius:8px;font-size:12px">改名</button>
-        <button class="btn" data-delete="${e.id}" title="删除" style="background:#fff;border:1px solid #fecaca;color:#dc2626;padding:6px 9px;border-radius:8px;font-size:12px">删除</button>
+      <div class="dc-actions">
+        <button class="open-btn" data-open="${e.id}">打开</button>
+        <button class="icon-btn" data-rename="${e.id}" title="重命名">✎</button>
+        <button class="icon-btn danger" data-delete="${e.id}" title="删除">🗑</button>
       </div>
-    </div>
-  `;
+    </div>`;
   }
 
   return `
-    <div class="doc-row" data-id="${e.id}" draggable="true" style="display:flex;align-items:center;gap:14px;padding:13px 18px;background:#fff;border-bottom:1px solid #eef2f7;cursor:pointer;transition:background 0.14s ease"
-      onmouseover="this.style.background='#f8faff';this.querySelector('.doc-actions').style.opacity='1'"
-      onmouseout="this.style.background='#fff';this.querySelector('.doc-actions').style.opacity='0'">
+  <div class="doc-row list" data-id="${e.id}" draggable="true">
+    <div class="doc-main">
       ${check}
-      <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,${accent},${accent}cc);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;flex-shrink:0">${escapeHtml(initial)}</div>
+      <div class="doc-avatar" style="background:linear-gradient(135deg,${accent},${accent}cc)">${escapeHtml(initial)}</div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:14px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.title)}</div>
-        <div style="font-size:11px;color:#94a3b8;margin-top:1px">测试用例导图</div>
-      </div>
-      <span style="width:110px;font-size:12.5px;color:#64748b">${nodeCount.toLocaleString()} 节点</span>
-      <span style="width:150px;font-size:12px;color:#94a3b8">${when}</span>
-      <div class="doc-actions" style="width:158px;flex-shrink:0;display:flex;gap:6px;justify-content:flex-end;align-items:center;opacity:0;transition:opacity 0.14s ease">
-        <button class="btn" data-open="${e.id}" style="background:#eff6ff;border:1px solid #bfdbfe;color:#2563eb;padding:5px 12px;border-radius:7px;font-size:12px;white-space:nowrap;flex-shrink:0">打开</button>
-        <button class="btn" data-rename="${e.id}" title="重命名" style="background:#fff;border:1px solid #e2e8f0;color:#64748b;padding:5px 8px;border-radius:7px;font-size:12px;white-space:nowrap;flex-shrink:0">改名</button>
-        <button class="btn" data-delete="${e.id}" title="删除" style="background:#fff;border:1px solid #fecaca;color:#dc2626;padding:5px 8px;border-radius:7px;font-size:12px;white-space:nowrap;flex-shrink:0">删除</button>
+        <div class="doc-title">${escapeHtml(e.title)}</div>
+        <div class="doc-sub">测试用例导图 · ${nodeCount.toLocaleString()} 节点</div>
       </div>
     </div>
-  `;
-}
+    <span class="row-count"><b>${nodeCount.toLocaleString()}</b> 节点</span>
+    <span class="row-time" title="${new Date(e.updatedAt).toLocaleString('zh-CN', { hour12: false })}">${relTime(e.updatedAt)}</span>
+    <div class="row-actions">
+      <button class="open-btn" data-open="${e.id}">打开</button>
+      <button class="icon-btn" data-rename="${e.id}" title="重命名">✎</button>
+      <button class="icon-btn danger" data-delete="${e.id}" title="删除">🗑</button>
+    </div>
+  </div>`;
+};
 
 /** 树节点总数（含根） */
 function countTreeNodes(n: { children?: unknown[] }): number {

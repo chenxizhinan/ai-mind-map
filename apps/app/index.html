@@ -35,6 +35,13 @@
       .group-items { padding: 4px 10px 10px; }
       .group-items.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; padding: 14px; }
       .doc-row { display: flex; align-items: center; gap: 13px; padding: 12px 12px; background: #fff; border-radius: 10px; cursor: pointer; transition: background .14s ease, box-shadow .14s ease; position: relative; }
+      /* 列表行与表头共用同一列模板：标题自适应 | 节点数 84 | 时间 78 | 操作 110 */
+      .doc-row.list, .list-cols { display: grid; grid-template-columns: minmax(0, 1fr) 84px 78px 110px; column-gap: 12px; align-items: center; }
+      .doc-row.list .row-meta { display: contents; }
+      .doc-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
+      .row-count { text-align: right; }
+      .row-time { text-align: right; }
+      .row-actions { justify-content: flex-end; }
       .doc-row::before { content: ''; position: absolute; left: 2px; top: 10px; bottom: 10px; width: 3px; border-radius: 2px; background: transparent; transition: background .14s ease; }
       .doc-row:hover { background: #f8fbff; box-shadow: 0 2px 10px rgba(37,99,235,.08); }
       .doc-row:hover::before { background: #2563eb; }
@@ -44,9 +51,9 @@
       .doc-title { font-size: 14px; font-weight: 600; color: #1e293b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .doc-sub { font-size: 11.5px; color: #94a3b8; margin-top: 2px; }
       .row-meta { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
-      .row-count { font-size: 12.5px; color: #64748b; width: 84px; text-align: right; }
+      .row-count { font-size: 12.5px; color: #64748b; }
       .row-count b { color: #334155; font-weight: 600; }
-      .row-time { font-size: 12px; color: #94a3b8; width: 78px; text-align: right; }
+      .row-time { font-size: 12px; color: #94a3b8; }
       .row-actions { display: flex; gap: 6px; align-items: center; opacity: 0; transition: opacity .14s ease; }
       .doc-row:hover .row-actions { opacity: 1; }
       .open-btn { border: none; background: #2563eb; color: #fff; padding: 5px 13px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; }
@@ -54,6 +61,13 @@
       .icon-btn:hover { border-color: #93c5fd; color: #2563eb; background: #f8fbff; }
       .icon-btn.danger:hover { border-color: #fca5a5; color: #dc2626; background: #fef2f2; }
       .doc-check { width: 15px; height: 15px; accent-color: #2563eb; cursor: pointer; flex-shrink: 0; }
+      .doc-card { position: relative; display: flex; flex-direction: column; gap: 12px; background: #fff; border: 1px solid #eef2f7; border-radius: 12px; padding: 14px; transition: box-shadow .16s ease, border-color .16s ease, transform .16s ease; }
+      .doc-card:hover { box-shadow: 0 8px 24px rgba(37,99,235,.12); border-color: #bfdbfe; transform: translateY(-2px); }
+      .doc-card .doc-check { position: absolute; top: 12px; right: 12px; }
+      .dc-head { display: flex; align-items: center; gap: 11px; min-width: 0; }
+      .dc-title-wrap { flex: 1; min-width: 0; }
+      .dc-actions { display: flex; gap: 8px; }
+      .dc-actions .open-btn { flex: 1; }
       .drop-hover { outline: 2px dashed #93c5fd; outline-offset: 2px; background: #f0f7ff !important; }
       .batch-bar { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 1200; background: rgba(15,23,42,.92); backdrop-filter: blur(8px); color: #fff; border-radius: 14px; padding: 10px 16px; display: none; align-items: center; gap: 10px; box-shadow: 0 16px 44px rgba(15,23,42,.4); }
       .batch-bar button { border: none; border-radius: 9px; padding: 7px 13px; font-size: 12.5px; cursor: pointer; }
@@ -453,11 +467,11 @@
               <button class="hbtn primary" id="home-new">＋ 新建导图</button>
             </div>
           </div>
-          <div id="home-list-head" style="display:none;align-items:center;gap:13px;padding:6px 24px 10px;font-size:11.5px;font-weight:600;color:#94a3b8;letter-spacing:.4px">
-            <span style="flex:1">文件名</span>
-            <span style="width:84px;text-align:right">节点数</span>
-            <span style="width:78px;text-align:right">修改时间</span>
-            <span style="width:150px"></span>
+          <div id="home-list-head" class="list-cols" style="display:none;padding:6px 23px 10px;font-size:11.5px;font-weight:600;color:#94a3b8;letter-spacing:.4px">
+            <span>文件名</span>
+            <span style="text-align:right">节点数</span>
+            <span style="text-align:right">修改时间</span>
+            <span></span>
           </div>
 
           <div id="home-grid"></div>
