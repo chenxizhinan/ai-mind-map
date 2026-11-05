@@ -2180,8 +2180,8 @@ async function pullRemote(docId?: string): Promise<void> {
   if (rid) {
     const last = lastPushAtByRemote.get(rid) ?? 0;
     if (Date.now() - last < 1500) return; // 自己刚推送过该文档，忽略回声
-  } else if (Date.now() - (lastPushAtByRemote.get('#legacy') ?? 0) < 1500) {
-    return;
+  } else if (bridgeMultiDoc || Date.now() - (lastPushAtByRemote.get('#legacy') ?? 0) < 1500) {
+    return; // 多文档模式没有无 id 的文档；遗留回声抑制照旧
   }
   try {
     const url = rid ? `${BRIDGE_URL}/doc/${encodeURIComponent(rid)}` : `${BRIDGE_URL}/doc`;
@@ -2460,9 +2460,10 @@ async function pushRemote(): Promise<void> {
   if (!senderId) return;
   // 占位内容（空白/等待远端填充）绝不推送：曾把演示/空白内容覆盖到真实 bridge 文档上
   if (pendingRemoteFill) return;
-  // 演示文档与索引外文档一律不推送：否则会走下面的 /doc 遗留兼容端点，把演示内容写到远端
+  // 演示文档/本地专用文档/索引外文档一律不推送：
+  // 否则会走下面的 /doc 遗留兼容端点（dir 模式 404），产生无谓的失败请求
   const senderEntry = loadDocsIndex().find((e) => e.id === senderId);
-  if (!senderEntry || senderEntry.demo) return;
+  if (!senderEntry || senderEntry.demo || senderEntry.keepLocalOnly) return;
   // 先快照内容与标题：await 期间用户可能切走文档，不能把 B 的内容写进 A 的 bridge 文档
   const payload = JSON.stringify(doc);
   const title = store.document.meta.title || '未命名导图';
@@ -2500,8 +2501,9 @@ async function pushRemote(): Promise<void> {
         }
         void syncDocsFromBridge();
       }
-    } else {
-      // 遗留单文档 bridge（POST /docs 400/404）：写 /doc 兼容端点
+    } else if (!bridgeMultiDoc) {
+      // 仅旧版单文档 bridge（POST /docs 400/404）才写 /doc 兼容端点；
+      // 多文档模式下走到这里意味着该文档本就不应推送（演示/本地专用），跳过即可
       lastPushAtByRemote.set('#legacy', Date.now());
       await fetch(`${BRIDGE_URL}/doc`, {
         method: 'PUT',
@@ -2776,12 +2778,16 @@ function cardHtml(e: DocEntry): string {
   const hues = ['#3b82f6', '#22d3ee', '#4ade80', '#f59e0b', '#f472b6', '#a78bfa', '#34d399'];
   const accent = hues[(e.title || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0) % hues.length]!;
   const nodeCount = e.nodeCount ?? docNodeCount(e.id);
+  const check = homeBatchMode
+    ? `<input type="checkbox" data-check="${e.id}" ${selectedDocIds.has(e.id) ? 'checked' : ''} style="width:15px;height:15px;accent-color:#2563eb;cursor:pointer;flex-shrink:0">`
+    : '';
 
   if (homeViewMode === 'card') {
     return `
-    <div class="doc-row" data-id="${e.id}" style="position:relative;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px;cursor:pointer;box-shadow:0 1px 3px rgba(15,23,42,0.04);transition:transform 0.16s ease,box-shadow 0.16s ease,border-color 0.16s ease"
+    <div class="doc-row" data-id="${e.id}" draggable="true" style="position:relative;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px;cursor:pointer;box-shadow:0 1px 3px rgba(15,23,42,0.04);transition:transform 0.16s ease,box-shadow 0.16s ease,border-color 0.16s ease"
       onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 10px 28px rgba(15,23,42,0.10)';this.style.borderColor='#bfdbfe'"
       onmouseout="this.style.transform='';this.style.boxShadow='0 1px 3px rgba(15,23,42,0.04)';this.style.borderColor='#e2e8f0'">
+      ${homeBatchMode ? `<label style="position:absolute;top:12px;left:12px;cursor:pointer"><input type="checkbox" data-check="${e.id}" ${selectedDocIds.has(e.id) ? 'checked' : ''} style="width:16px;height:16px;accent-color:#2563eb;cursor:pointer"></label>` : ''}
       <div style="position:absolute;top:16px;right:16px;width:8px;height:8px;border-radius:50%;background:${accent}"></div>
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
         <div style="width:40px;height:40px;border-radius:11px;background:linear-gradient(135deg,${accent},${accent}cc);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px;flex-shrink:0">${escapeHtml(initial)}</div>
@@ -2801,9 +2807,10 @@ function cardHtml(e: DocEntry): string {
   }
 
   return `
-    <div class="doc-row" data-id="${e.id}" style="display:flex;align-items:center;gap:14px;padding:13px 18px;background:#fff;border-bottom:1px solid #eef2f7;cursor:pointer;transition:background 0.14s ease"
+    <div class="doc-row" data-id="${e.id}" draggable="true" style="display:flex;align-items:center;gap:14px;padding:13px 18px;background:#fff;border-bottom:1px solid #eef2f7;cursor:pointer;transition:background 0.14s ease"
       onmouseover="this.style.background='#f8faff';this.querySelector('.doc-actions').style.opacity='1'"
       onmouseout="this.style.background='#fff';this.querySelector('.doc-actions').style.opacity='0'">
+      ${check}
       <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,${accent},${accent}cc);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;flex-shrink:0">${escapeHtml(initial)}</div>
       <div style="flex:1;min-width:0">
         <div style="font-size:14px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.title)}</div>
@@ -2880,7 +2887,71 @@ function applyHomeViewChrome(): void {
   }
 }
 
+// ---------- 首页分组（bridge 共享清单：GET/PUT /groups） ----------
+interface DocGroupInfo {
+  id: string;
+  name: string;
+}
+
+interface GroupsManifest {
+  updatedAt?: string;
+  groups: DocGroupInfo[];
+  assignments: Record<string, string>;
+}
+
+let groupsManifest: GroupsManifest = { groups: [], assignments: {} };
+let homeBatchMode = false;
+const selectedDocIds = new Set<string>();
+
+async function loadGroups(): Promise<void> {
+  try {
+    const res = await fetch(`${BRIDGE_URL}/groups`);
+    if (!res.ok) return;
+    const m = (await res.json()) as GroupsManifest;
+    groupsManifest = {
+      groups: Array.isArray(m.groups) ? m.groups : [],
+      assignments: m.assignments && typeof m.assignments === 'object' ? m.assignments : {},
+    };
+  } catch {
+    /* bridge 未启动：沿用缓存 */
+  }
+}
+
+async function persistGroups(): Promise<void> {
+  try {
+    const res = await fetch(`${BRIDGE_URL}/groups`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groups: groupsManifest.groups, assignments: groupsManifest.assignments }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const saved = (await res.json()) as GroupsManifest;
+    groupsManifest = { groups: saved.groups ?? [], assignments: saved.assignments ?? {} };
+  } catch {
+    toast('分组未保存：bridge 不可达', 'warn');
+  }
+}
+
+async function moveDocsToGroup(ids: string[], groupId: string | null): Promise<void> {
+  if (!ids.length) return;
+  if (groupId) {
+    if (!groupsManifest.groups.some((g) => g.id === groupId)) return;
+    for (const id of ids) groupsManifest.assignments[id] = groupId;
+  } else {
+    for (const id of ids) delete groupsManifest.assignments[id];
+  }
+  await persistGroups();
+  selectedDocIds.clear();
+  renderHome();
+  updateHomeBatchBar();
+  toast(groupId ? `已移动 ${ids.length} 篇到「${groupsManifest.groups.find((g) => g.id === groupId)?.name ?? ''}」` : `已移出 ${ids.length} 篇的分组`, 'success');
+}
+
 function renderHome(): void {
+  void loadGroups().then(() => renderHomeInner());
+}
+
+function renderHomeInner(): void {
   const grid = document.getElementById('home-grid') as HTMLDivElement;
   const entries = loadDocsIndex().sort((a, b) => b.updatedAt - a.updatedAt);
   // 顶栏统计：项目数 / 总节点数
@@ -2898,18 +2969,46 @@ function renderHome(): void {
   grid.style.borderRadius = listStyle ? '12px' : '0';
   grid.style.overflow = listStyle ? 'hidden' : 'visible';
   grid.style.border = listStyle ? '1px solid #e8edf3' : 'none';
-  grid.innerHTML =
-    isEmpty
-      ? `<div style="text-align:center;padding:72px 0;border:1px dashed #cbd5e1;border-radius:14px;background:#fbfdff;margin-top:14px">
-           <div style="font-size:34px;margin-bottom:10px">🗺</div>
-           <div style="color:#475569;font-size:14px;margin-bottom:6px">还没有导图</div>
-           <div style="color:#94a3b8;font-size:12.5px">点击右上角「＋ 新建导图」开始，或导入现有文件</div>
-         </div>`
-      : entries.map((e) => cardHtml(e)).join('');
+  if (isEmpty) {
+    grid.innerHTML = `<div style="text-align:center;padding:72px 0;border:1px dashed #cbd5e1;border-radius:14px;background:#fbfdff;margin-top:14px">
+         <div style="font-size:34px;margin-bottom:10px">🗺</div>
+         <div style="color:#475569;font-size:14px;margin-bottom:6px">还没有导图</div>
+         <div style="color:#94a3b8;font-size:12.5px">点击右上角「＋ 新建导图」开始，或导入现有文件</div>
+       </div>`;
+    updateHomeBatchBar();
+    return;
+  }
+  // 按分组分区：清单里的分组依序在前，未分组在最后
+  const sections: Array<{ gid: string | null; name: string; items: DocEntry[] }> = groupsManifest.groups.map((g) => ({
+    gid: g.id,
+    name: g.name,
+    items: entries.filter((e) => groupsManifest.assignments[e.id] === g.id),
+  }));
+  const ungrouped = entries.filter((e) => !groupsManifest.assignments[e.id]);
+  if (ungrouped.length) sections.push({ gid: null, name: '未分组', items: ungrouped });
+  const groupHeaderHtml = (gid: string | null, name: string, count: number): string => `
+    <div class="group-head" data-drop-group="${gid ?? ''}" style="display:flex;align-items:center;gap:8px;padding:12px 6px 8px;margin-top:4px">
+      <span style="font-size:13px;font-weight:700;color:#334155">${gid ? '🗂' : '📄'} ${escapeHtml(name)}</span>
+      <span style="font-size:11px;color:#94a3b8">${count} 篇 · 可拖入</span>
+      <span style="flex:1"></span>
+      ${gid ? `<button class="btn" data-group-rename="${gid}" style="padding:2px 9px;font-size:11px;border:1px solid #e2e8f0;background:#fff;color:#64748b;border-radius:6px">改名</button>
+               <button class="btn" data-group-del="${gid}" style="padding:2px 9px;font-size:11px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:6px">删除分组</button>` : ''}
+    </div>`;
+  grid.innerHTML = sections
+    .map(
+      (sec) =>
+        groupHeaderHtml(sec.gid, sec.name, sec.items.length) +
+        `<div class="group-items" style="${homeViewMode === 'list' ? '' : 'display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:18px'}">` +
+        sec.items.map((e) => cardHtml(e)).join('') +
+        `</div>`,
+    )
+    .join('');
+  ensureHomeBatchBar();
+  updateHomeBatchBar();
   // 行/卡整体可点（打开）；按钮冒泡已由 data-* 分发处理
   grid.querySelectorAll('.doc-row').forEach((el) =>
     el.addEventListener('click', (ev) => {
-      if ((ev.target as HTMLElement).closest('button')) return; // 按钮各自处理
+      if ((ev.target as HTMLElement).closest('button,input')) return; // 按钮/复选框各自处理
       pushDocNav((el as HTMLElement).dataset.id!);
       showHome(false);
       openDoc((el as HTMLElement).dataset.id!);
@@ -2959,7 +3058,10 @@ function renderHome(): void {
 function showHome(show: boolean): void {
   const home = document.getElementById('home-view') as HTMLDivElement;
   home.style.display = show ? 'block' : 'none';
-  if (!show) return;
+  if (!show) {
+    updateHomeBatchBar();
+    return;
+  }
   closeStatsPopover();
   persistCurrent();
   renderHome();
@@ -2969,7 +3071,187 @@ function showHome(show: boolean): void {
   } catch {
     /* ignore */
   }
+  updateHomeBatchBar();
 }
+
+// ---------- 首页批量管理条 + 拖拽分组（一次性绑定，委托到 grid） ----------
+let homeBatchBarBuilt = false;
+
+function ensureHomeBatchBar(): void {
+  if (homeBatchBarBuilt) return;
+  homeBatchBarBuilt = true;
+  const bar = document.createElement('div');
+  bar.id = 'home-batch-bar';
+  bar.style.cssText =
+    'display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:1200;background:#1e293b;color:#fff;border-radius:12px;padding:10px 16px;align-items:center;gap:10px;box-shadow:0 12px 40px rgba(15,23,42,.3)';
+  bar.innerHTML = `
+    <span id="hb-count" style="font-size:13px;font-weight:600">已选 0 篇</span>
+    <select id="hb-move" style="border:none;border-radius:8px;padding:7px 10px;font-size:12.5px;background:#334155;color:#fff;outline:none">
+      <option value="">移动到分组…</option>
+      <option value="__new__">＋ 新建分组…</option>
+    </select>
+    <button id="hb-ungroup" class="btn" style="border:none;background:#475569;color:#fff;padding:6px 12px;border-radius:8px;font-size:12.5px;cursor:pointer">移出分组</button>
+    <button id="hb-del" class="btn" style="border:none;background:#dc2626;color:#fff;padding:6px 12px;border-radius:8px;font-size:12.5px;cursor:pointer">删除所选</button>
+    <button id="hb-cancel" class="btn" style="border:none;background:transparent;color:#cbd5e1;padding:6px 10px;font-size:12.5px;cursor:pointer">取消</button>
+  `;
+  document.body.appendChild(bar);
+  document.getElementById('hb-ungroup')?.addEventListener('click', () => {
+    const ids = [...selectedDocIds];
+    if (ids.length) void moveDocsToGroup(ids, null);
+  });
+  document.getElementById('hb-del')?.addEventListener('click', () => {
+    const ids = [...selectedDocIds];
+    if (!ids.length) return;
+    if (!confirm(`删除所选 ${ids.length} 篇导图？删除后不可恢复。`)) return;
+    void Promise.all(ids.map((id) => deleteDoc(id))).then(() => {
+      selectedDocIds.clear();
+      renderHome();
+      updateHomeBatchBar();
+    });
+  });
+  document.getElementById('hb-cancel')?.addEventListener('click', () => {
+    selectedDocIds.clear();
+    renderHome();
+    updateHomeBatchBar();
+  });
+  document.getElementById('hb-move')?.addEventListener('change', () => {
+    const sel = document.getElementById('hb-move') as HTMLSelectElement;
+    const v = sel.value;
+    sel.value = '';
+    if (!v) return;
+    const ids = [...selectedDocIds];
+    if (!ids.length) return;
+    if (v === '__new__') {
+      const name = prompt('新建分组名称', '')?.trim();
+      if (!name) return;
+      const g = { id: 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name };
+      groupsManifest.groups.push(g);
+      void persistGroups().then(() => {
+        void moveDocsToGroup(ids, g.id);
+      });
+    } else {
+      void moveDocsToGroup(ids, v);
+    }
+  });
+}
+
+function updateHomeBatchBar(): void {
+  const bar = document.getElementById('home-batch-bar');
+  if (!bar) return;
+  const home = document.getElementById('home-view');
+  const onHome = !!home && home.style.display !== 'none';
+  const visible = onHome && (homeBatchMode || selectedDocIds.size > 0);
+  bar.style.display = visible ? 'flex' : 'none';
+  const c = document.getElementById('hb-count');
+  if (c) c.textContent = `已选 ${selectedDocIds.size} 篇`;
+  const sel = document.getElementById('hb-move') as HTMLSelectElement | null;
+  if (sel) {
+    const cur = sel.value;
+    sel.innerHTML =
+      `<option value="">移动到分组…</option><option value="__new__">＋ 新建分组…</option>` +
+      groupsManifest.groups.map((g) => `<option value="${escapeHtml(g.id)}">${escapeHtml(g.name)}</option>`).join('');
+    sel.value = groupsManifest.groups.some((g) => g.id === cur) ? cur : '';
+  }
+}
+
+/** 拖拽与复选框事件委托（grid 的 innerHTML 重建不影响这些监听） */
+function initHomeBatchUi(): void {
+  const grid = document.getElementById('home-grid') as HTMLDivElement;
+  grid.addEventListener('change', (ev) => {
+    const t = ev.target as HTMLElement;
+    if (!(t instanceof HTMLInputElement) || !t.dataset.check) return;
+    if (t.checked) selectedDocIds.add(t.dataset.check);
+    else selectedDocIds.delete(t.dataset.check);
+    updateHomeBatchBar();
+  });
+  grid.addEventListener('dragstart', (ev) => {
+    const row = (ev.target as HTMLElement).closest('.doc-row') as HTMLElement | null;
+    if (!row?.dataset.id) return;
+    const id = row.dataset.id;
+    const ids = selectedDocIds.has(id) && selectedDocIds.size > 1 ? [...selectedDocIds] : [id];
+    if (ev.dataTransfer) {
+      ev.dataTransfer.setData('text/plain', JSON.stringify(ids));
+      ev.dataTransfer.effectAllowed = 'move';
+    }
+  });
+  grid.addEventListener('dragover', (ev) => {
+    const head = (ev.target as HTMLElement).closest('[data-drop-group]') as HTMLElement | null;
+    if (!head) return;
+    ev.preventDefault();
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
+    head.style.outline = '2px dashed #93c5fd';
+    head.style.outlineOffset = '2px';
+    head.style.background = '#f0f7ff';
+  });
+  grid.addEventListener('dragleave', (ev) => {
+    const head = (ev.target as HTMLElement).closest('[data-drop-group]') as HTMLElement | null;
+    if (!head) return;
+    head.style.outline = '';
+    head.style.background = '';
+  });
+  grid.addEventListener('drop', (ev) => {
+    const head = (ev.target as HTMLElement).closest('[data-drop-group]') as HTMLElement | null;
+    if (!head) return;
+    ev.preventDefault();
+    head.style.outline = '';
+    head.style.background = '';
+    let ids: string[] = [];
+    try {
+      ids = JSON.parse(ev.dataTransfer?.getData('text/plain') ?? '[]') as string[];
+    } catch {
+      ids = [];
+    }
+    const gid = head.getAttribute('data-drop-group') || null;
+    if (ids.length) void moveDocsToGroup(ids, gid);
+  });
+  // 分组改名/删除按钮也在 grid 内，走点击委托（避免每次渲染重复绑定）
+  grid.addEventListener('click', (ev) => {
+    const target = ev.target as HTMLElement;
+    const rn = target.closest('[data-group-rename]') as HTMLElement | null;
+    if (rn) {
+      const gid = rn.dataset.groupRename!;
+      const g = groupsManifest.groups.find((x) => x.id === gid);
+      const next = prompt('重命名分组', g?.name ?? '')?.trim();
+      if (next && g) {
+        g.name = next;
+        void persistGroups().then(() => renderHome());
+      }
+      return;
+    }
+    const del = target.closest('[data-group-del]') as HTMLElement | null;
+    if (del) {
+      const gid = del.dataset.groupDel!;
+      const g = groupsManifest.groups.find((x) => x.id === gid);
+      if (!g) return;
+      if (!confirm(`删除分组「${g.name}」？组内文档将回到未分组。`)) return;
+      groupsManifest.groups = groupsManifest.groups.filter((x) => x.id !== gid);
+      for (const [docId, g2] of Object.entries(groupsManifest.assignments)) {
+        if (g2 === gid) delete groupsManifest.assignments[docId];
+      }
+      void persistGroups().then(() => renderHome());
+    }
+  });
+}
+initHomeBatchUi();
+
+document.getElementById('home-group')?.addEventListener('click', () => {
+  const name = prompt('新建分组名称', '')?.trim();
+  if (!name) return;
+  groupsManifest.groups.push({ id: 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name });
+  void persistGroups().then(() => renderHome());
+});
+document.getElementById('home-batch')?.addEventListener('click', () => {
+  homeBatchMode = !homeBatchMode;
+  if (!homeBatchMode) selectedDocIds.clear();
+  const b = document.getElementById('home-batch') as HTMLButtonElement | null;
+  if (b) {
+    b.style.background = homeBatchMode ? '#eff6ff' : '#fff';
+    b.style.color = homeBatchMode ? '#2563eb' : '#475569';
+    b.style.borderColor = homeBatchMode ? '#bfdbfe' : '#cbd5e1';
+  }
+  renderHome();
+  updateHomeBatchBar();
+});
 
 // 视图切换
 document.getElementById('vm-list')?.addEventListener('click', () => setHomeViewMode('list'));

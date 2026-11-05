@@ -565,3 +565,43 @@ describe('bridge /ai/chat with injected client', () => {
     expect(files.length).toBeGreaterThanOrEqual(before + 1);
   });
 });
+
+describe('bridge groups API (dir mode)', () => {
+  it('PUT /groups 保存并 GET /groups 读回；指向未知分组的分配被丢弃', async () => {
+    const ctx = setupDir();
+    cleanupDirs.push(ctx.dir);
+    openHandles.push(ctx.handle);
+    const port = await ctx.ready;
+    const manifest = {
+      groups: [
+        { id: 'g1', name: 'Hades 系列' },
+        { id: 'g2', name: '平台用例' },
+      ],
+      assignments: { 'BYOS-验证与测试用例': 'g2', x: 'g-not-exist' },
+    };
+    const put = await fetch(`http://localhost:${port}/groups`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(manifest),
+    });
+    expect(put.ok).toBe(true);
+    const saved = (await put.json()) as { groups: Array<{ id: string }>; assignments: Record<string, string> };
+    expect(saved.groups).toHaveLength(2);
+    expect(saved.assignments).toEqual({ 'BYOS-验证与测试用例': 'g2' });
+
+    const get = await fetch(`http://localhost:${port}/groups`);
+    expect(get.ok).toBe(true);
+    const back = (await get.json()) as { assignments: Record<string, string> };
+    expect(back.assignments).toEqual({ 'BYOS-验证与测试用例': 'g2' });
+    expect(existsSync(join(ctx.docsDir, '.groups.json'))).toBe(true);
+  });
+
+  it('GET /groups 404s in single-file mode', async () => {
+    const ctx = setup();
+    cleanupDirs.push(ctx.dir);
+    openHandles.push(ctx.handle);
+    const port = await ctx.ready;
+    const res = await fetch(`http://localhost:${port}/groups`);
+    expect(res.status).toBe(404);
+  });
+});

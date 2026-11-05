@@ -8,7 +8,7 @@
  *
  * 所有写入经 save() 落盘（store.ts），与单文件模式同一套校验。
  */
-import { readdirSync, existsSync, statSync, readFileSync, unlinkSync } from 'node:fs';
+import { readdirSync, existsSync, statSync, readFileSync, unlinkSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, basename, extname } from 'node:path';
 import { DocStore, NodeTypeRegistry } from '@ai-mind-map/core';
 import { save } from './store.js';
@@ -19,6 +19,19 @@ export interface DocSummary {
   updatedAt: string;
   nodeCount: number;
   active: boolean;
+}
+
+/** 首页文档分组：清单持久化在数据目录的 .groups.json（bridge /groups 端点） */
+export interface DocGroup {
+  id: string;
+  name: string;
+}
+
+export interface GroupsManifest {
+  updatedAt: string;
+  groups: DocGroup[];
+  /** 文档 id → 分组 id；未出现的文档属于「未分组」 */
+  assignments: Record<string, string>;
 }
 
 export interface DocContext {
@@ -37,6 +50,9 @@ export interface DocContext {
   putDoc(id: string, raw: unknown): string;
   /** 删除文档（--dir 删文件并清内存槽位；单文件模式不支持）。返回是否真的删除了文件 */
   deleteDoc(id: string): boolean;
+  /** 分组清单（可选：仅 --dir 模式支持；单文件模式无分组） */
+  getGroups?(): GroupsManifest;
+  setGroups?(input: { groups?: unknown; assignments?: unknown }): GroupsManifest;
 }
 
 interface Slot {
@@ -336,6 +352,54 @@ export class DirDocManager implements DocContext {
       }
     }
     return { added, changed, removed };
+  }
+
+  private groupsPath(): string {
+    return join(this.dir, '.groups.json');
+  }
+
+  /** 读取分组清单；文件不存在/损坏时返回空清单 */
+  getGroups(): GroupsManifest {
+    const fp = this.groupsPath();
+    if (!existsSync(fp)) return { updatedAt: new Date().toISOString(), groups: [], assignments: {} };
+    try {
+      const raw = JSON.parse(readFileSync(fp, 'utf8')) as Partial<GroupsManifest>;
+      return {
+        updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
+        groups: Array.isArray(raw.groups)
+          ? raw.groups.filter((g) => g && typeof g.id === 'string' && typeof g.name === 'string')
+          : [],
+        assignments: raw.assignments && typeof raw.assignments === 'object' ? raw.assignments : {},
+      };
+    } catch {
+      return { updatedAt: new Date().toISOString(), groups: [], assignments: {} };
+    }
+  }
+
+  /** 覆盖保存分组清单（校验并丢弃非法项），返回落盘后的清单 */
+  setGroups(input: { groups?: unknown; assignments?: unknown }): GroupsManifest {
+    const groups: DocGroup[] = Array.isArray(input.groups)
+      ? (input.groups as Array<{ id?: unknown; name?: unknown }>)
+          .map((g) => ({
+            id: typeof g?.id === 'string' ? g.id.trim() : '',
+            name: typeof g?.name === 'string' ? g.name.trim() : '',
+          }))
+          .filter((g) => g.id !== '' && g.name !== '')
+          .map((g) => ({ id: g.id.slice(0, 80), name: g.name.slice(0, 60) }))
+      : [];
+    const assignments: Record<string, string> = {};
+    if (input.assignments && typeof input.assignments === 'object') {
+      for (const [docId, gid] of Object.entries(input.assignments as Record<string, unknown>)) {
+        if (typeof docId !== 'string' || docId.length > 200) continue;
+        if (typeof gid !== 'string') continue;
+        if (!groups.some((g) => g.id === gid)) continue; // 指向不存在分组的分配一并丢弃
+        assignments[docId] = gid;
+      }
+    }
+    const clean: GroupsManifest = { updatedAt: new Date().toISOString(), groups, assignments };
+    mkdirSync(this.dir, { recursive: true });
+    writeFileSync(this.groupsPath(), JSON.stringify(clean, null, 2), 'utf8');
+    return clean;
   }
 
   /** AI 循环等写入后，取本次会话弄脏的 docId 集合（供 broadcast） */

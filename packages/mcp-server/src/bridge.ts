@@ -308,6 +308,28 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
         return;
       }
 
+      // ---- 分组清单（仅 --dir 模式；首页按分组组织文档） ----
+      if (url.pathname === '/groups' && (req.method === 'GET' || req.method === 'PUT')) {
+        if (!isDir || !opts.docs.getGroups || !opts.docs.setGroups) {
+          json(res, 404, { error: 'groups require --dir mode' });
+          return;
+        }
+        if (req.method === 'GET') {
+          json(res, 200, opts.docs.getGroups());
+          return;
+        }
+        const rawGroups = await readBody(req);
+        await enqueue(async () => {
+          try {
+            const body = JSON.parse(rawGroups) as { groups?: unknown; assignments?: unknown };
+            json(res, 200, opts.docs.setGroups!({ groups: body.groups, assignments: body.assignments }));
+          } catch (e) {
+            json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+          }
+        });
+        return;
+      }
+
       // ---- 全量文档 ----
       // 兼容端点：--file 模式 GET/PUT /doc 等价 /doc/default；--dir 模式 404 引导
       if (req.method === 'GET' && url.pathname === '/doc') {

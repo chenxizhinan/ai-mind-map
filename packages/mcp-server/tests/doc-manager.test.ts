@@ -284,3 +284,36 @@ describe('DirDocManager.openDoc 按名称解析（用户不知道文件 id）', 
     expect(() => m.openDoc({ title: '风马牛不相及' })).toThrow(/可用文档.*唯一的文档/);
   });
 });
+
+describe('DirDocManager 分组清单（.groups.json）', () => {
+  it('setGroups 校验并持久化，getGroups 读回一致', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'aimm-grp-'));
+    dirs.push(dir);
+    const m = new DirDocManager(makeRegistry(), dir);
+    const saved = m.setGroups({
+      groups: [
+        { id: 'g1', name: 'Hades 系列' },
+        { id: '', name: '空 id 应被丢弃' },
+        { name: '缺 id 应被丢弃' },
+        { id: 'g2', name: '  ' },
+      ],
+      assignments: { 'BYOS-验证与测试用例': 'g1', orphan: 'g-not-exist' },
+    });
+    expect(saved.groups.map((g) => g.id)).toEqual(['g1']);
+    expect(saved.assignments).toEqual({ 'BYOS-验证与测试用例': 'g1' });
+    const back = m.getGroups();
+    expect(back.groups).toEqual(saved.groups);
+    expect(back.assignments).toEqual(saved.assignments);
+  });
+
+  it('清单文件损坏时返回空清单而不是抛错', () => {
+    const { writeFileSync } = require('node:fs') as typeof import('node:fs');
+    const dir = mkdtempSync(join(tmpdir(), 'aimm-grp2-'));
+    dirs.push(dir);
+    const m = new DirDocManager(makeRegistry(), dir);
+    m.setGroups({ groups: [{ id: 'g1', name: 'A' }], assignments: {} });
+    const { writeFileSync: w } = require('node:fs') as typeof import('node:fs');
+    w(join(dir, '.groups.json'), '{broken', 'utf8');
+    expect(m.getGroups().groups).toEqual([]);
+  });
+});
