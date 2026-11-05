@@ -2793,7 +2793,7 @@ function applyRouteFromLocation(): void {
     showHome(false);
     return;
   }
-  loadDoc(blankDoc(key), false); // 拉取期间 renderer 的占位内容
+  loadDoc(blankDoc('加载中…'), false); // 拉取期间 renderer 的占位内容（内容到达后整树一次呈现）
   void (async () => {
     try {
       const res = await fetch(`${BRIDGE_URL}/doc/${encodeURIComponent(key)}`);
