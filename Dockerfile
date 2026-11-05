@@ -40,6 +40,8 @@ ENV NODE_ENV=production \
 COPY --from=build /repo/apps/app/dist /app/web
 COPY --from=build /repo/apps/app/serve.mjs /app/serve.mjs
 COPY --from=build /repo/dist-server/bridge.mjs /app/bridge.mjs
+# 技能目录：bridge 按需读取（get_skill / /skill），平台更新技能后重建镜像即生效
+COPY --from=build /repo/.agents/skills/test-case-designer /app/skill
 
 # 脑图存储目录（docker-compose 挂载持久化）
 RUN mkdir -p /data/mindmaps
