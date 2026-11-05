@@ -161,7 +161,8 @@ describe('MCP tools', () => {
     const delRes = await del({ id: created.id });
     expect(delRes.isError).toBeFalsy();
     expect(existsSync(join(ctx.docsDir, `${created.id}.mindmap.json`))).toBe(false);
-    expect(readdirSync(ctx.docsDir)).toHaveLength(0);
+    // 删除 = 移入回收站（.trash 子目录），不再直接销毁
+    expect(readdirSync(ctx.docsDir)).toEqual(['.trash']);
 
     const list = ctx.tools.get('list_documents')!;
     const docs = JSON.parse((await list({})).content[0].text);

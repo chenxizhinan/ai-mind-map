@@ -624,3 +624,43 @@ describe('bridge skill package (dir mode)', () => {
     expect(buf.toString('utf8')).toContain('scripts/validate-test-cases.js');
   });
 });
+
+describe('bridge recycle bin (dir mode)', () => {
+  it('删除 → 回收站可见 → 恢复 → 彻底删除', async () => {
+    const ctx = setupDir();
+    cleanupDirs.push(ctx.dir);
+    openHandles.push(ctx.handle);
+    const port = await ctx.ready;
+    const created = (await (
+      await fetch(`http://localhost:${port}/docs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: '待删文档' }),
+      })
+    ).json()) as { id: string };
+    // 删除（进回收站）
+    const del = await fetch(`http://localhost:${port}/doc/${encodeURIComponent(created.id)}`, { method: 'DELETE' });
+    expect(del.ok).toBe(true);
+    expect(existsSync(join(ctx.docsDir, `${created.id}.mindmap.json`))).toBe(false);
+    // 回收站可见
+    const trash = (await (await fetch(`http://localhost:${port}/trash`)).json()) as { items: Array<{ trashId: string; originalId: string; title: string }> };
+    expect(trash.items).toHaveLength(1);
+    expect(trash.items[0].originalId).toBe(created.id);
+    expect(trash.items[0].title).toBe('待删文档');
+    // 恢复（原 id 被 BYOS 占用的场景不存在，这里直接恢复）
+    const restore = await fetch(`http://localhost:${port}/trash/restore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trashId: trash.items[0].trashId }),
+    });
+    expect(restore.ok).toBe(true);
+    const restored = (await restore.json()) as { id: string; title: string };
+    expect(restored.title).toBe('待删文档');
+    // 再次删除并彻底删除
+    await fetch(`http://localhost:${port}/doc/${encodeURIComponent(created.id)}`, { method: 'DELETE' });
+    const trash2 = (await (await fetch(`http://localhost:${port}/trash`)).json()) as { items: Array<{ trashId: string }> };
+    const purge = await fetch(`http://localhost:${port}/trash/${encodeURIComponent(trash2.items[0].trashId)}`, { method: 'DELETE' });
+    expect(purge.ok).toBe(true);
+    expect((await (await fetch(`http://localhost:${port}/trash`)).json()).items).toHaveLength(0);
+  });
+});

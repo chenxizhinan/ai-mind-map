@@ -12,7 +12,7 @@ function doc(tree: MindNode, annotations: Array<Record<string, unknown>> = []): 
     meta: { title: tree.text, updatedAt: '2026-11-05T00:00:00.000Z' },
     tree,
     annotations,
-  } as MindDocument;
+  } as unknown as MindDocument;
 }
 function ann(id: string, nodeId: string, body: string): Record<string, unknown> {
   return { id, nodeId, createdBy: 'user', createdAt: 'x', body, status: 'open', replies: [] };

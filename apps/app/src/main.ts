@@ -1019,6 +1019,92 @@ function openSkillPreview(version: string, content: string): void {
   overlay.focus();
 }
 
+/** 回收站浮层：列出已删除文档，支持恢复 / 彻底删除 */
+async function openTrashDialog(): Promise<void> {
+  interface TrashItem { trashId: string; originalId: string; title: string; nodeCount: number; deletedAt: string }
+  let items: TrashItem[] = [];
+  try {
+    const res = await fetch(`${BRIDGE_URL}/trash`);
+    if (res.ok) items = ((await res.json()) as { items: TrashItem[] }).items ?? [];
+  } catch {
+    toast('回收站不可达：bridge 未连接', 'warn');
+    return;
+  }
+  const overlay = document.createElement('div');
+  overlay.style.cssText =
+    'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:1600;display:flex;align-items:center;justify-content:center';
+  const renderList = (): string =>
+    items.length
+      ? items
+          .map(
+            (it) => `
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid #eef2f7">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13.5px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(it.title)}</div>
+            <div style="font-size:11px;color:#94a3b8;margin-top:2px">${it.nodeCount.toLocaleString()} 节点 · 删除于 ${escapeHtml(it.deletedAt.slice(0, 16).replace('T', ' '))}</div>
+          </div>
+          <button class="btn" data-restore="${escapeHtml(it.trashId)}" style="padding:4px 12px;font-size:12px;background:#eff6ff;border:1px solid #bfdbfe;color:#2563eb;border-radius:8px;cursor:pointer">恢复</button>
+          <button class="btn" data-purge="${escapeHtml(it.trashId)}" style="padding:4px 12px;font-size:12px;background:#fff;border:1px solid #fecaca;color:#dc2626;border-radius:8px;cursor:pointer">彻底删除</button>
+        </div>`,
+          )
+          .join('')
+      : '<div style="padding:40px 0;text-align:center;color:#94a3b8;font-size:13px">回收站是空的</div>';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:14px;width:720px;max-width:94vw;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(15,23,42,.35);overflow:hidden" role="dialog">
+      <div style="display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #e2e8f0;background:#f8fafc">
+        <b style="font-size:15px;color:#1e293b">🗑 回收站</b>
+        <span style="font-size:11.5px;color:#94a3b8">删除的文档保留 30 天，之后自动清理</span>
+        <span style="flex:1"></span>
+        <button id="trash-close" style="border:none;background:transparent;color:#94a3b8;font-size:15px;cursor:pointer">✕</button>
+      </div>
+      <div id="trash-list" style="flex:1;overflow-y:auto;padding:6px 18px">${renderList()}</div>
+    </div>`;
+  const close = (): void => overlay.remove();
+  overlay.querySelector('#trash-close')?.addEventListener('click', close);
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+  });
+  overlay.querySelector('[data-trash-restore]')?.addEventListener; // 占位避免未用告警（实际绑定在下方委托）
+  const wire = (): void => {
+    overlay.querySelectorAll('[data-restore]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        const trashId = (btn as HTMLElement).dataset.restore!;
+        void fetch(`${BRIDGE_URL}/trash/restore`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trashId }),
+        })
+          .then((r) => r.json())
+          .then((r: { id?: string; title?: string; error?: string }) => {
+            if (r.error) throw new Error(r.error);
+            toast(`已恢复为「${r.title ?? r.id}」`, 'success');
+            return openTrashDialog().then(() => renderHome());
+          })
+          .catch((e2) => toast(`恢复失败：${e2.message ?? e2}`, 'error'));
+      }),
+    );
+    overlay.querySelectorAll('[data-purge]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        const trashId = (btn as HTMLElement).dataset.purge!;
+        void openConfirmDialog({ title: '彻底删除？', message: '彻底删除后无法再恢复。', confirmText: '彻底删除', danger: true }).then((ok) => {
+          if (!ok) return;
+          void fetch(`${BRIDGE_URL}/trash/${encodeURIComponent(trashId)}`, { method: 'DELETE' })
+            .then((r) => {
+              if (!r.ok) throw new Error(`HTTP ${r.status}`);
+              toast('已彻底删除', 'success');
+              return openTrashDialog().then(() => renderHome());
+            })
+            .catch((e2) => toast(`删除失败：${e2.message ?? e2}`, 'error'));
+        });
+      }),
+    );
+  };
+  wire();
+  document.body.appendChild(overlay);
+  overlay.tabIndex = -1;
+  overlay.focus();
+}
+
 /** 单节点样式面板（右键 → 设置节点样式：颜色 + 图标） */
 const ICON_CHOICES: Array<{ value: string; label: string }> = [
   { value: '', label: '无' },
@@ -3228,14 +3314,22 @@ function renderHomeInner(): void {
     el.addEventListener('click', () => {
       const id = (el as HTMLElement).dataset.delete!;
       const cur = loadDocsIndex().find((x) => x.id === id);
-      void openConfirmDialog({
-        title: `删除「${cur?.title ?? '未命名'}」？`,
-        message: '删除后不可恢复，远端文件将一并删除。',
-        confirmText: '删除',
-        danger: true,
-      }).then((ok) => {
-        if (ok) void deleteDoc(id).then(() => renderHome());
-      });
+      void (async () => {
+        const ok1 = await openConfirmDialog({
+          title: `删除「${cur?.title ?? '未命名'}」？`,
+          message: '将移入回收站，30 天内可随时恢复。',
+          confirmText: '删除',
+          danger: true,
+        });
+        if (!ok1) return;
+        const ok2 = await openConfirmDialog({
+          title: '再次确认删除',
+          message: `第二次确认：确定删除「${cur?.title ?? '未命名'}」吗？`,
+          confirmText: '确认删除',
+          danger: true,
+        });
+        if (ok2) void deleteDoc(id).then(() => renderHome());
+      })();
     }),
   );
 }
@@ -3288,19 +3382,27 @@ function ensureHomeBatchBar(): void {
   document.getElementById('hb-del')?.addEventListener('click', () => {
     const ids = [...selectedDocIds];
     if (!ids.length) return;
-    void openConfirmDialog({
-      title: `删除所选 ${ids.length} 篇导图？`,
-      message: '删除后不可恢复，远端文件将一并删除。',
-      confirmText: '全部删除',
-      danger: true,
-    }).then((ok) => {
-      if (!ok) return;
+    void (async () => {
+      const ok1 = await openConfirmDialog({
+        title: `删除所选 ${ids.length} 篇导图？`,
+        message: '将移入回收站，30 天内可随时恢复。',
+        confirmText: '删除',
+        danger: true,
+      });
+      if (!ok1) return;
+      const ok2 = await openConfirmDialog({
+        title: '再次确认批量删除',
+        message: `第二次确认：确定删除所选 ${ids.length} 篇导图吗？`,
+        confirmText: '确认删除',
+        danger: true,
+      });
+      if (!ok2) return;
       void Promise.all(ids.map((id) => deleteDoc(id))).then(() => {
         selectedDocIds.clear();
         renderHome();
         updateHomeBatchBar();
       });
-    });
+    })();
   });
   document.getElementById('hb-cancel')?.addEventListener('click', () => {
     selectedDocIds.clear();
@@ -3442,6 +3544,9 @@ document.getElementById('home-group')?.addEventListener('click', () => {
     groupsManifest.groups.push({ id: 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name });
     void persistGroups().then(() => renderHome());
   });
+});
+document.getElementById('home-trash')?.addEventListener('click', () => {
+  void openTrashDialog();
 });
 document.getElementById('home-batch')?.addEventListener('click', () => {
   homeBatchMode = !homeBatchMode;

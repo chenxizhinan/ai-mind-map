@@ -8,7 +8,7 @@
  *
  * 所有写入经 save() 落盘（store.ts），与单文件模式同一套校验。
  */
-import { readdirSync, existsSync, statSync, readFileSync, unlinkSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readdirSync, existsSync, statSync, readFileSync, unlinkSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { join, resolve, basename, extname } from 'node:path';
 import { DocStore, NodeTypeRegistry, type MindDocument } from '@ai-mind-map/core';
 import { save } from './store.js';
@@ -301,13 +301,23 @@ export class DirDocManager implements DocContext {
     return id;
   }
 
+  private trashDir(): string {
+    return join(this.dir, '.trash');
+  }
+
+  /**
+   * 删除 = 移入回收站（同盘 rename，原子且廉价），30 天后惰性清理。
+   * .trash 子目录不匹配 *.mindmap.json 顶层扫描，不会出现在文档列表。
+   */
   deleteDoc(id: string): boolean {
     if (!isValidDocId(id)) return false;
     const fp = this.fileOf(id);
     const existed = existsSync(fp);
     if (existed) {
       try {
-        unlinkSync(fp);
+        const trashDir = this.trashDir();
+        mkdirSync(trashDir, { recursive: true });
+        renameSync(fp, join(trashDir, `${Date.now()}__${id}.mindmap.json`));
       } catch {
         return false;
       }
@@ -318,6 +328,83 @@ export class DirDocManager implements DocContext {
     this.history.delete(id);
     if (this.activeId === id) this.activeId = null;
     return existed;
+  }
+
+  /** 回收站清单（解析 .trash 内文件；惰性清理超过 30 天的条目） */
+  listTrash(): Array<{ trashId: string; originalId: string; title: string; nodeCount: number; deletedAt: string }> {
+    const trashDir = this.trashDir();
+    if (!existsSync(trashDir)) return [];
+    const cutoff = Date.now() - 30 * 24 * 3600 * 1000;
+    const out: Array<{ trashId: string; originalId: string; title: string; nodeCount: number; deletedAt: string }> = [];
+    for (const f of readdirSync(trashDir)) {
+      if (!f.endsWith('.mindmap.json')) continue;
+      const trashId = f.replace(/\.mindmap\.json$/, '');
+      const sep = trashId.indexOf('__');
+      if (sep <= 0) continue;
+      const deletedAtMs = Number(trashId.slice(0, sep));
+      const originalId = trashId.slice(sep + 2);
+      if (!Number.isFinite(deletedAtMs) || !isValidDocId(originalId)) continue;
+      if (deletedAtMs < cutoff) {
+        // 惰性清理：超过 30 天的条目直接删除
+        try {
+          unlinkSync(join(trashDir, f));
+        } catch {
+          /* 忽略 */
+        }
+        continue;
+      }
+      try {
+        const d = JSON.parse(readFileSync(join(trashDir, f), 'utf8')) as { meta?: { title?: string }; tree?: { children?: unknown[] } };
+        const cnt = (n: { children?: unknown[] }): number => 1 + (n.children ?? []).reduce((acc: number, c) => acc + cnt(c as { children?: unknown[] }), 0);
+        out.push({
+          trashId,
+          originalId,
+          title: d.meta?.title || originalId,
+          nodeCount: d.tree ? cnt(d.tree) : 0,
+          deletedAt: new Date(deletedAtMs).toISOString(),
+        });
+      } catch {
+        /* 损坏条目跳过 */
+      }
+    }
+    return out.sort((a, b) => (a.deletedAt < b.deletedAt ? 1 : -1));
+  }
+
+  /** 从回收站恢复：目标 id 被占用时自动加后缀，返回恢复后的文档 id */
+  restoreFromTrash(trashId: string): { id: string; title: string } {
+    if (!trashId || trashId.includes('..') || trashId.includes('/') || trashId.includes('\\')) {
+      throw new Error(`非法回收站条目: ${trashId}`);
+    }
+    const sep = trashId.indexOf('__');
+    if (sep <= 0) throw new Error(`非法回收站条目: ${trashId}`);
+    const originalId = trashId.slice(sep + 2);
+    if (!isValidDocId(originalId)) throw new Error(`非法文档 id: ${originalId}`);
+    const src = join(this.trashDir(), `${trashId}.mindmap.json`);
+    if (!existsSync(src)) throw new Error(`回收站条目不存在: ${trashId}`);
+    let targetId = originalId;
+    let n = 2;
+    while (existsSync(this.fileOf(targetId))) targetId = `${originalId}-恢复${n++}`;
+    renameSync(src, this.fileOf(targetId));
+    this.slots.delete(targetId); // 下次按 id 重载
+    this.known.delete(this.fileOf(targetId));
+    const store = this.loadSlot(targetId)!.store;
+    return { id: targetId, title: store.document.meta.title };
+  }
+
+  /** 彻底删除回收站条目 */
+  purgeTrash(trashId: string): boolean {
+    if (!trashId || trashId.includes('/') || trashId.includes('\\') || trashId.includes('..')) return false;
+    const fp = join(this.trashDir(), `${trashId}.mindmap.json`);
+    if (!existsSync(fp)) return false;
+    unlinkSync(fp);
+    return true;
+  }
+
+  /** AI 循环等写入后，取本次会话弄脏的 docId 集合（供 broadcast） */
+  takeDirty(): string[] {
+    const out = [...this.dirty];
+    this.dirty.clear();
+    return out;
   }
 
   /** 目录扫描：返回相对上次快照的增/改/删（bridge 轮询调用） */
@@ -425,12 +512,6 @@ export class DirDocManager implements DocContext {
     return clean;
   }
 
-  /** AI 循环等写入后，取本次会话弄脏的 docId 集合（供 broadcast） */
-  takeDirty(): string[] {
-    const out = [...this.dirty];
-    this.dirty.clear();
-    return out;
-  }
 }
 
 /** --file 单文档模式的兼容上下文 */

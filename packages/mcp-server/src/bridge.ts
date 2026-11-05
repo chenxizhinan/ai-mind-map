@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { DocStore, type NodeTypeRegistry } from '@ai-mind-map/core';
 import { collectToolExecutors, runToolLoop, type AnthropicLike } from './tool-loop.js';
 import { renderMethodPrompt } from '@ai-mind-map/core';
+import type { MindDocument } from '@ai-mind-map/core';
 import { DirDocManager, SingleDocContext, isValidDocId, type DocContext } from './doc-manager.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getSkill, listSkillFiles } from './skill.js';
@@ -277,6 +278,45 @@ export function startBridge(opts: BridgeOptions): BridgeHandle {
             },
           },
         });
+        return;
+      }
+
+      // ---- 回收站：删除的文档移入 .trash，可恢复 / 彻底删除（仅 --dir 模式） ----
+      if (url.pathname === '/trash' && req.method === 'GET') {
+        if (!isDir || !opts.docs.listTrash) {
+          json(res, 404, { error: 'trash requires --dir mode' });
+          return;
+        }
+        json(res, 200, { items: opts.docs.listTrash() });
+        return;
+      }
+      if (url.pathname === '/trash/restore' && req.method === 'POST') {
+        if (!isDir || !opts.docs.restoreFromTrash) {
+          json(res, 404, { error: 'trash requires --dir mode' });
+          return;
+        }
+        const rawRestore = await readBody(req);
+        await enqueue(async () => {
+          try {
+            const body = JSON.parse(rawRestore) as { trashId?: unknown };
+            const r = opts.docs.restoreFromTrash(String(body.trashId ?? ''));
+            broadcast(r.id, r.title);
+            json(res, 200, r);
+          } catch (e) {
+            json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+          }
+        });
+        return;
+      }
+      const trashMatch = /^\/trash\/([^/]+)$/.exec(url.pathname);
+      if (trashMatch && req.method === 'DELETE') {
+        if (!isDir || !opts.docs.purgeTrash) {
+          json(res, 404, { error: 'trash requires --dir mode' });
+          return;
+        }
+        const trashId = decodeURIComponent(trashMatch[1]!);
+        const ok = opts.docs.purgeTrash(trashId);
+        json(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'trash entry not found' });
         return;
       }
 
