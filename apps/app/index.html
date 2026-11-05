@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ai-mind-map</title>
     <style>
+      /* 首屏路由预判（见 head 内联脚本）：/ 直接显示列表；/d/<id> 只显示画布，杜绝刷新闪切 */
+      #home-view { display: none; }
+      html.route-home #home-view { display: block; }
       * { box-sizing: border-box; margin: 0; padding: 0; }
       html, body, #app { height: 100%; overflow: hidden; }
       body {
@@ -269,7 +272,15 @@
       footer.hint b { font-weight: 600; color: #64748b; }
     </style>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='2' y='9.5' width='6' height='5' rx='1' fill='%231e293b'/%3E%3Crect x='16' y='3' width='6' height='4.6' rx='1' fill='%232563eb'/%3E%3Crect x='16' y='10.2' width='6' height='4.6' rx='1' fill='%230891b2'/%3E%3Crect x='16' y='17.4' width='4.6' height='4.6' rx='1' fill='%2316a34a'/%3E%3C/svg%3E" />
-  </head>
+    <script>
+    // 首屏路由预判（在首次绘制之前）：/ 首页列表直接可见；/d/<id> 只显示画布
+    if (location.pathname.indexOf('/d/') === 0) {
+      document.documentElement.classList.add('route-doc');
+    } else {
+      document.documentElement.classList.add('route-home');
+    }
+  </script>
+</head>
   <body>
     <div id="app">
       <header>
@@ -335,7 +346,7 @@
           <button id="btn-add-case" class="primary" title="新建用例 (Tab)">+ 用例</button>
         </div>
       </header>
-      <div id="home-view" style="display:none;position:absolute;inset:0;z-index:500;overflow-y:auto;background:#f6f8fb">
+      <div id="home-view" style="position:absolute;inset:0;z-index:500;overflow-y:auto;background:#f6f8fb">
         <!-- 背景装饰：极浅商务蓝光晕 -->
         <div style="position:absolute;inset:0;overflow:hidden;pointer-events:none">
           <div style="position:absolute;top:-140px;right:-80px;width:520px;height:520px;border-radius:50%;background:radial-gradient(circle,rgba(37,99,235,0.07),transparent 65%)"></div>
