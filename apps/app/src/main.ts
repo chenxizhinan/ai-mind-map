@@ -981,6 +981,37 @@ function openConfirmDialog(opts: {
   });
 }
 
+/** SKILL.md 预览浮层：展示最新版技能内容（等宽、可滚动、可复制） */
+function openSkillPreview(version: string, content: string): void {
+  const overlay = document.createElement('div');
+  overlay.style.cssText =
+    'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:1600;display:flex;align-items:center;justify-content:center';
+  const lineCount = content.split('\n').length;
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:14px;width:960px;max-width:94vw;height:86vh;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(15,23,42,.35);overflow:hidden" role="dialog">
+      <div style="display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #e2e8f0;background:#f8fafc">
+        <b style="font-size:15px;color:#1e293b">SKILL.md · test-case-designer</b>
+        <span style="font-size:11px;font-weight:600;color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:999px;padding:1px 8px">v${escapeHtml(version)}</span>
+        <span style="font-size:11px;color:#94a3b8">${lineCount} 行</span>
+        <span style="flex:1"></span>
+        <button class="btn" id="sp-copy" style="padding:5px 12px;font-size:12px;border:1px solid #cbd5e1;background:#fff;color:#475569;border-radius:8px;cursor:pointer">复制内容</button>
+        <button id="sp-close" style="border:none;background:transparent;color:#94a3b8;font-size:15px;cursor:pointer">✕</button>
+      </div>
+      <pre id="sp-body" style="flex:1;overflow:auto;margin:0;padding:16px 20px;background:#0f172a;color:#e2e8f0;font-size:12.5px;line-height:1.65;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word">${escapeHtml(content)}</pre>
+    </div>`;
+  const close = (): void => overlay.remove();
+  overlay.querySelector('#sp-close')?.addEventListener('click', close);
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+  });
+  overlay.querySelector('#sp-copy')?.addEventListener('click', () => {
+    void copyText(content, 'SKILL.md 内容');
+  });
+  document.body.appendChild(overlay);
+  overlay.tabIndex = -1;
+  overlay.focus();
+}
+
 /** 单节点样式面板（右键 → 设置节点样式：颜色 + 图标） */
 const ICON_CHOICES: Array<{ value: string; label: string }> = [
   { value: '', label: '无' },
@@ -3573,7 +3604,6 @@ async function openConnectDialog(): Promise<void> {
     mcpHttp: mcpHttpText,
     mcpUrl,
     mcp: mcpConfigText,
-    skill: skillText,
     chat: chatHint,
   });
   const copyLabel: Record<string, string> = {
