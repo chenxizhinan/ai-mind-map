@@ -859,6 +859,101 @@ function toast(message: string, level: 'info' | 'success' | 'warn' | 'error' = '
   }, 2600);
 }
 
+// ---------- 风格化对话框（替代原生 prompt/confirm） ----------
+/** 输入对话框：返回输入值（取消/关闭返回 null） */
+function openPromptDialog(opts: {
+  title: string;
+  label?: string;
+  value?: string;
+  placeholder?: string;
+  confirmText?: string;
+}): Promise<string | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText =
+      'position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:1600;display:flex;align-items:center;justify-content:center';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:14px;padding:22px 24px;width:440px;max-width:92vw;box-shadow:0 24px 80px rgba(15,23,42,.3)" role="dialog">
+        <div style="font-size:15px;font-weight:700;color:#1e293b;margin-bottom:${opts.label ? '4px' : '12px'}">${escapeHtml(opts.title)}</div>
+        ${opts.label ? `<div style="font-size:12.5px;color:#64748b;margin-bottom:12px">${escapeHtml(opts.label)}</div>` : ''}
+        <input id="dlg-input" value="${escapeHtml(opts.value ?? '')}" placeholder="${escapeHtml(opts.placeholder ?? '')}"
+          style="width:100%;box-sizing:border-box;font-size:14px;padding:9px 12px;border:1px solid #cbd5e1;border-radius:9px;outline:none" />
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
+          <button class="btn" id="dlg-cancel" style="padding:7px 18px;border-radius:9px;background:#e2e8f0;border:none;color:#475569;cursor:pointer">取消</button>
+          <button class="btn primary" id="dlg-ok" style="padding:7px 20px;border-radius:9px;cursor:pointer">${escapeHtml(opts.confirmText ?? '确定')}</button>
+        </div>
+      </div>`;
+    const done = (value: string | null): void => {
+      overlay.remove();
+      resolve(value);
+    };
+    const ok = (): void => {
+      const v = (overlay.querySelector('#dlg-input') as HTMLInputElement).value.trim();
+      done(v || null);
+    };
+    overlay.querySelector('#dlg-ok')?.addEventListener('click', ok);
+    overlay.querySelector('#dlg-cancel')?.addEventListener('click', () => done(null));
+    overlay.addEventListener('pointerdown', (e) => {
+      if (e.target === overlay) done(null);
+    });
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        ok();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        done(null);
+      }
+    });
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector('#dlg-input') as HTMLInputElement;
+    input.focus();
+    if (input.value) input.select();
+  });
+}
+
+/** 确认对话框：返回是否确认；danger=true 时确认按钮为红色 */
+function openConfirmDialog(opts: {
+  title: string;
+  message?: string;
+  confirmText?: string;
+  danger?: boolean;
+}): Promise<boolean> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText =
+      'position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:1600;display:flex;align-items:center;justify-content:center';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:14px;padding:22px 24px;width:440px;max-width:92vw;box-shadow:0 24px 80px rgba(15,23,42,.3)" role="dialog">
+        <div style="font-size:15px;font-weight:700;color:#1e293b;margin-bottom:${opts.message ? '6px' : '0'}">${escapeHtml(opts.title)}</div>
+        ${opts.message ? `<div style="font-size:12.5px;color:#64748b;line-height:1.6">${escapeHtml(opts.message)}</div>` : ''}
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
+          <button class="btn" id="dlg-cancel" style="padding:7px 18px;border-radius:9px;background:#e2e8f0;border:none;color:#475569;cursor:pointer">取消</button>
+          <button class="btn ${opts.danger ? '' : 'primary'}" id="dlg-ok" style="padding:7px 20px;border-radius:9px;cursor:pointer;${opts.danger ? 'background:#dc2626;border:none;color:#fff;' : ''}">${escapeHtml(opts.confirmText ?? '确定')}</button>
+        </div>
+      </div>`;
+    const done = (ok: boolean): void => {
+      overlay.remove();
+      resolve(ok);
+    };
+    overlay.querySelector('#dlg-ok')?.addEventListener('click', () => done(true));
+    overlay.querySelector('#dlg-cancel')?.addEventListener('click', () => done(false));
+    overlay.addEventListener('pointerdown', (e) => {
+      if (e.target === overlay) done(false);
+    });
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        done(true);
+      } else if (e.key === 'Escape') {
+        done(false);
+      }
+    });
+    document.body.appendChild(overlay);
+    (overlay.querySelector('#dlg-ok') as HTMLButtonElement)?.focus();
+  });
+}
+
 /** 单节点样式面板（右键 → 设置节点样式：颜色 + 图标） */
 const ICON_CHOICES: Array<{ value: string; label: string }> = [
   { value: '', label: '无' },
@@ -3042,9 +3137,8 @@ function renderHomeInner(): void {
       const id = (el as HTMLElement).dataset.rename!;
       const entries2 = loadDocsIndex();
       const cur = entries2.find((x) => x.id === id);
-      const next = prompt('重命名导图', cur?.title ?? '')?.trim();
-      if (next) {
-        // 同步改文档 meta.title
+      void openPromptDialog({ title: '重命名导图', label: '新的导图名称', value: cur?.title ?? '', confirmText: '重命名' }).then((next) => {
+        if (!next) return;
         try {
           const raw = localStorage.getItem(DOC_PREFIX + id);
           if (raw) {
@@ -3056,16 +3150,21 @@ function renderHomeInner(): void {
         cur!.title = next;
         saveDocsIndex(entries2);
         renderHome();
-      }
-    }),
+      });
+    })
   );
   grid.querySelectorAll('[data-delete]').forEach((el) =>
     el.addEventListener('click', () => {
       const id = (el as HTMLElement).dataset.delete!;
       const cur = loadDocsIndex().find((x) => x.id === id);
-      if (confirm(`删除「${cur?.title ?? '未命名'}」？删除后不可恢复。`)) {
-        void deleteDoc(id).then(() => renderHome());
-      }
+      void openConfirmDialog({
+        title: `删除「${cur?.title ?? '未命名'}」？`,
+        message: '删除后不可恢复，远端文件将一并删除。',
+        confirmText: '删除',
+        danger: true,
+      }).then((ok) => {
+        if (ok) void deleteDoc(id).then(() => renderHome());
+      });
     }),
   );
 }
@@ -3118,11 +3217,18 @@ function ensureHomeBatchBar(): void {
   document.getElementById('hb-del')?.addEventListener('click', () => {
     const ids = [...selectedDocIds];
     if (!ids.length) return;
-    if (!confirm(`删除所选 ${ids.length} 篇导图？删除后不可恢复。`)) return;
-    void Promise.all(ids.map((id) => deleteDoc(id))).then(() => {
-      selectedDocIds.clear();
-      renderHome();
-      updateHomeBatchBar();
+    void openConfirmDialog({
+      title: `删除所选 ${ids.length} 篇导图？`,
+      message: '删除后不可恢复，远端文件将一并删除。',
+      confirmText: '全部删除',
+      danger: true,
+    }).then((ok) => {
+      if (!ok) return;
+      void Promise.all(ids.map((id) => deleteDoc(id))).then(() => {
+        selectedDocIds.clear();
+        renderHome();
+        updateHomeBatchBar();
+      });
     });
   });
   document.getElementById('hb-cancel')?.addEventListener('click', () => {
@@ -3138,12 +3244,13 @@ function ensureHomeBatchBar(): void {
     const ids = [...selectedDocIds];
     if (!ids.length) return;
     if (v === '__new__') {
-      const name = prompt('新建分组名称', '')?.trim();
-      if (!name) return;
-      const g = { id: 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name };
-      groupsManifest.groups.push(g);
-      void persistGroups().then(() => {
-        void moveDocsToGroup(ids, g.id);
+      void openPromptDialog({ title: '新建分组', label: '分组名称（将把所选文档移入该分组）', confirmText: '创建' }).then((name) => {
+        if (!name) return;
+        const g = { id: 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name };
+        groupsManifest.groups.push(g);
+        void persistGroups().then(() => {
+          void moveDocsToGroup(ids, g.id);
+        });
       });
     } else {
       void moveDocsToGroup(ids, v);
@@ -3227,11 +3334,12 @@ function initHomeBatchUi(): void {
     if (rn) {
       const gid = rn.dataset.groupRename!;
       const g = groupsManifest.groups.find((x) => x.id === gid);
-      const next = prompt('重命名分组', g?.name ?? '')?.trim();
-      if (next && g) {
-        g.name = next;
-        void persistGroups().then(() => renderHome());
-      }
+      void openPromptDialog({ title: '重命名分组', value: g?.name ?? '', confirmText: '重命名' }).then((next) => {
+        if (next && g) {
+          g.name = next;
+          void persistGroups().then(() => renderHome());
+        }
+      });
       return;
     }
     const del = target.closest('[data-group-del]') as HTMLElement | null;
@@ -3239,22 +3347,30 @@ function initHomeBatchUi(): void {
       const gid = del.dataset.groupDel!;
       const g = groupsManifest.groups.find((x) => x.id === gid);
       if (!g) return;
-      if (!confirm(`删除分组「${g.name}」？组内文档将回到未分组。`)) return;
-      groupsManifest.groups = groupsManifest.groups.filter((x) => x.id !== gid);
-      for (const [docId, g2] of Object.entries(groupsManifest.assignments)) {
-        if (g2 === gid) delete groupsManifest.assignments[docId];
-      }
-      void persistGroups().then(() => renderHome());
+      void openConfirmDialog({
+        title: `删除分组「${g.name}」？`,
+        message: '组内文档将回到未分组，不会被删除。',
+        confirmText: '删除分组',
+        danger: true,
+      }).then((ok) => {
+        if (!ok) return;
+        groupsManifest.groups = groupsManifest.groups.filter((x) => x.id !== gid);
+        for (const [docId, g2] of Object.entries(groupsManifest.assignments)) {
+          if (g2 === gid) delete groupsManifest.assignments[docId];
+        }
+        void persistGroups().then(() => renderHome());
+      });
     }
   });
 }
 initHomeBatchUi();
 
 document.getElementById('home-group')?.addEventListener('click', () => {
-  const name = prompt('新建分组名称', '')?.trim();
-  if (!name) return;
-  groupsManifest.groups.push({ id: 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name });
-  void persistGroups().then(() => renderHome());
+  void openPromptDialog({ title: '新建分组', label: '分组名称', placeholder: '如：Hades 系列', confirmText: '创建' }).then((name) => {
+    if (!name) return;
+    groupsManifest.groups.push({ id: 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name });
+    void persistGroups().then(() => renderHome());
+  });
 });
 document.getElementById('home-batch')?.addEventListener('click', () => {
   homeBatchMode = !homeBatchMode;
